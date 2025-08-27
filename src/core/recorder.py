@@ -1,14 +1,23 @@
-import argparse
-import time
+import subprocess
 import os
+from datetime import datetime
+import pytz
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-u", "--username", required=True)
-parser.add_argument("--output", required=True)
-args = parser.parse_args()
+def record_stream(username, output_file):
+    est = pytz.timezone('US/Eastern')
+    now = datetime.now(est)
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-print(f"[SIMULATION] Recording {args.username} stream to {args.output}...")
-time.sleep(10)
-with open(args.output, "w") as f:
-    f.write("FAKE VIDEO DATA")
-print(f"[SIMULATION] Finished recording {args.username}.")
+    # ffmpeg command to record livestream
+    ffmpeg_cmd = [
+        "ffmpeg", "-y",
+        "-i", f"https://pull-hls.tiktokcdn.com/stream/{username}.m3u8",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-s", "854x480",
+        "-c:a", "aac",
+        output_file
+    ]
+
+    print(f"[FFMPEG] Starting recording for {username} to {output_file}...")
+    subprocess.run(ffmpeg_cmd)

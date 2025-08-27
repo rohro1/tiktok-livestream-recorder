@@ -1,0 +1,14 @@
+.
+├── main.py
+├── project_tree.txt
+├── requirements.txt
+├── src
+│   └── core
+│       ├── recorder.py
+│       ├── tiktok_api.py
+│       └── tiktok_recorder.py
+└── templates
+    └── status.html
+
+    4 directories, 7 files
+    
