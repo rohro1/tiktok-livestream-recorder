@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Livestream Status Dashboard</title>
+    <style>
+        body { font-family: Arial; padding: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>Livestream Status Dashboard</h1>
+    <p>Last updated: {{ now.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+    <table>
+        <tr>
+            <th>Username</th>
+            <th>Online</th>
+            <th>Current Duration</th>
+            <th>Last Online</th>
+            <th>Last Duration</th>
+        </tr>
+        {% for username, data in statuses.items() %}
+        <tr>
+            <td>{{ username }}</td>
+            <td>{{ "Yes" if data['online'] else "No" }}</td>
+            <td>{{ data['duration'] }}</td>
+            <td>{{ data['last_online'].strftime('%Y-%m-%d %H:%M:%S') if data['last_online'] else "Never" }}</td>
+            <td>{{ data['last_duration'] }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>
