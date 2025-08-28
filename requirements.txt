@@ -4,4 +4,4 @@ google-auth==2.23.3
 google-auth-oauthlib==1.2.0
 google-api-python-client==2.93.0
 requests==2.32.1
-pytz==2025.8
+pytz==2025.2
