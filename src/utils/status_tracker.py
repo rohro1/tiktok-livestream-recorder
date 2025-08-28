@@ -1,38 +1,56 @@
+# src/utils/status_tracker.py
+
 import threading
 import time
+from datetime import datetime, timedelta
+
 
 class StatusTracker:
     def __init__(self):
-        self.status = {}
         self.lock = threading.Lock()
+        self.status = {}  # username -> info
 
-    def set_status(self, username, online=False, recording=False):
+    def update_status(self, username, online=False, recording=False):
         with self.lock:
-            self.status[username] = {
-                "status": "online" if online else "offline",
-                "recording": recording,
-                "last_live": time.strftime("%Y-%m-%d %H:%M:%S") if online else self.status.get(username, {}).get("last_live"),
-                "duration": self._calculate_duration(username, online)
-            }
+            if username not in self.status:
+                self.status[username] = {
+                    "online": False,
+                    "recording": False,
+                    "last_online": None,
+                    "last_duration": None,
+                    "current_start": None,
+                }
 
-    def _calculate_duration(self, username, online):
-        if online:
-            if "start_time" not in self.status.get(username, {}):
-                self.status[username]["start_time"] = time.time()
-            elapsed = time.time() - self.status[username]["start_time"]
-            return f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
-        else:
-            if "start_time" in self.status.get(username, {}):
-                del self.status[username]["start_time"]
-            return "0m 0s"
+            user_status = self.status[username]
+            user_status["online"] = online
+            user_status["recording"] = recording
 
-    def get_status(self, username):
+            if online:
+                if user_status["current_start"] is None:
+                    # just went online
+                    user_status["current_start"] = datetime.utcnow()
+            else:
+                if user_status["current_start"]:
+                    # just went offline, compute duration
+                    duration = datetime.utcnow() - user_status["current_start"]
+                    user_status["last_duration"] = str(duration).split(".")[0]  # remove microseconds
+                    user_status["last_online"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                    user_status["current_start"] = None
+
+    def get_status(self):
         with self.lock:
-            return self.status.get(username, {"status": "unknown", "recording": False, "last_live": None, "duration": None})
+            result = {}
+            for username, info in self.status.items():
+                entry = info.copy()
+                # calculate current duration if live
+                if info["online"] and info["current_start"]:
+                    duration = datetime.utcnow() - info["current_start"]
+                    entry["current_duration"] = str(duration).split(".")[0]
+                else:
+                    entry["current_duration"] = None
+                result[username] = entry
+            return result
 
-    def get_all_status(self):
-        with self.lock:
-            return dict(self.status)
 
-# Singleton tracker
+# Singleton instance
 status_tracker = StatusTracker()
