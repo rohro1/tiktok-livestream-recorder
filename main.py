@@ -1,110 +1,97 @@
 import os
 import threading
-import datetime
 import time
-from flask import Flask, redirect, request, session, url_for, render_template_string
+from flask import Flask, jsonify, render_template_string
+from utils.status_tracker import StatusTracker
+from recorder import TikTokRecorder
+from tiktok_api import TikTokAPI
 
-from src.utils.oauth_drive import get_flow, set_credentials, get_drive_service
-from src.utils.status_tracker import StatusTracker
-
-# --- Flask setup ---
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersecret")
 
 status_tracker = StatusTracker()
+api = TikTokAPI()
+recorders = {}
 
-# --- Google Drive OAuth Routes ---
-@app.route("/authorize")
-def authorize():
-    flow = get_flow()
-    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
-    return redirect(auth_url)
-
-
-@app.route("/oauth2callback")
-def oauth2callback():
-    flow = get_flow()
-    flow.fetch_token(authorization_response=request.url)
-
-    if not flow.credentials:
-        return "Authorization failed.", 400
-
-    # Save credentials
-    set_credentials(flow.credentials)
-
-    session["credentials"] = True
-    return redirect(url_for("status"))
-
-
-# --- Status Page ---
-@app.route("/status")
-def status():
-    creds_ok = "Yes" if "credentials" in session else "No"
-
-    # build HTML for each tracked user
-    statuses = status_tracker.get_all_statuses()
-    user_rows = ""
-    for username, info in statuses.items():
-        user_rows += f"""
-        <tr>
-            <td>{username}</td>
-            <td>{"🟢 Online" if info['online'] else "⚪ Offline"}</td>
-            <td>{info['recording_duration']}</td>
-            <td>{info['last_online']}</td>
-            <td>{info['last_duration']}</td>
-        </tr>
-        """
-
-    html = f"""
-    <h1>TikTok Livestream Recorder Status</h1>
-    <p>Google Drive Authorized: {creds_ok}</p>
-    <table border="1" cellpadding="6">
+# HTML template for /status page
+STATUS_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TikTok Recorder Status</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 30px; background: #f9f9f9; }
+        h1 { color: #333; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+        th { background: #eee; }
+        tr:nth-child(even) { background: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>📡 TikTok Livestream Recorder - Status</h1>
+    <table>
         <tr>
             <th>Username</th>
             <th>Status</th>
             <th>Recording Duration</th>
             <th>Last Online</th>
-            <th>Last Duration</th>
+            <th>Last Live Duration</th>
         </tr>
-        {user_rows}
+        {% for user, info in statuses.items() %}
+        <tr>
+            <td>{{ user }}</td>
+            <td>{{ info["status"] }}</td>
+            <td>{{ info["recording_duration"] }}</td>
+            <td>{{ info["last_online"] }}</td>
+            <td>{{ info["last_live_duration"] }}</td>
+        </tr>
+        {% endfor %}
     </table>
-    """
-    return render_template_string(html)
+</body>
+</html>
+"""
 
+@app.route("/")
+def home():
+    return "<h2>✅ TikTok Recorder is running!</h2><p>Visit <a href='/status'>/status</a> to view livestream recording status.</p>"
 
-# --- Background Monitor (dummy for now) ---
-def background_monitor():
-    """
-    Simulates livestream detection and updates the tracker.
-    Replace this with real TikTok API detection + recorder.
-    """
-    usernames_file = "usernames.txt"
+@app.route("/status")
+def status_page():
+    statuses = status_tracker.get_all_statuses()
+    return render_template_string(STATUS_TEMPLATE, statuses=statuses)
 
+def monitor_user(username):
+    """Monitor a single TikTok username for livestreams"""
     while True:
-        if os.path.exists(usernames_file):
-            with open(usernames_file, "r") as f:
-                usernames = [line.strip() for line in f if line.strip()]
-        else:
-            usernames = []
+        try:
+            is_live, stream_url = api.is_user_live(username)
+            if is_live:
+                if username not in recorders or not recorders[username].is_recording:
+                    status_tracker.update_status(username, "ONLINE")
+                    recorder = TikTokRecorder(username, stream_url, status_tracker)
+                    recorders[username] = recorder
+                    threading.Thread(target=recorder.start_recording, daemon=True).start()
+            else:
+                status_tracker.update_status(username, "OFFLINE")
+        except Exception as e:
+            print(f"Error monitoring {username}: {e}")
+        time.sleep(60)  # check every 1 min
 
-        for u in usernames:
-            # fake online toggle
-            now = datetime.datetime.now().strftime("%H:%M:%S")
-            status_tracker.update_status(
-                username=u,
-                online=True,
-                recording_duration=f"{now} running",
-                last_online=now,
-                last_duration="--"
-            )
+def load_usernames():
+    """Load usernames from usernames.txt"""
+    if not os.path.exists("usernames.txt"):
+        return []
+    with open("usernames.txt", "r") as f:
+        return [line.strip() for line in f if line.strip()]
 
-        time.sleep(30)  # check every 30 sec
-
+def start_monitoring():
+    """Start monitoring all usernames"""
+    usernames = load_usernames()
+    for username in usernames:
+        if username not in recorders:
+            threading.Thread(target=monitor_user, args=(username,), daemon=True).start()
 
 if __name__ == "__main__":
-    # start background monitor
-    t = threading.Thread(target=background_monitor, daemon=True)
-    t.start()
-
-    # run web server
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    threading.Thread(target=start_monitoring, daemon=True).start()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
