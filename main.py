@@ -1,44 +1,40 @@
-import os
-from flask import Flask, redirect, url_for, render_template
+from flask import Flask, request, redirect, jsonify
 from src.utils.oauth_drive import GoogleDriveOAuth
-from src.utils.status_tracker import StatusTracker
-from src.core.tiktok_recorder import TikTokRecorderWorker
-import threading
+import os
 
-app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
-app.secret_key = "super-secret-key"
+app = Flask(__name__)
 
-drive_oauth = GoogleDriveOAuth()
-status_tracker = StatusTracker()
+# Change these values to match your Google Cloud OAuth app
+CREDENTIALS_FILE = "credentials.json"
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+REDIRECT_URI = "https://e0ea3c89-7858-4fa4-b7d5-1bc54bf48c59-00-1aiz3bpxtehrg.kirk.render.dev/oauth2callback"
 
-recorder_worker = TikTokRecorderWorker(status_tracker=status_tracker)
-threading.Thread(target=recorder_worker.start, daemon=True).start()
+gdrive_auth = GoogleDriveOAuth(CREDENTIALS_FILE, SCOPES, REDIRECT_URI)
 
 @app.route("/")
 def home():
-    drive_connected = drive_oauth.is_authenticated()
-    return f"✅ TikTok Recorder running. Drive connected: {drive_connected}. <a href='/authorize'>Connect Google Drive</a> | <a href='/disconnect'>Disconnect</a>"
-
-@app.route("/authorize")
-def authorize():
-    return redirect(drive_oauth.get_authorize_url())
+    auth_url = gdrive_auth.create_auth_url()
+    return f'<a href="{auth_url}">Authorize Google Drive Access</a>'
 
 @app.route("/oauth2callback")
 def oauth2callback():
-    if drive_oauth.fetch_token():
-        return redirect(url_for("status"))
-    return "OAuth failed. Try again."
+    code_url = request.url
+    creds = gdrive_auth.fetch_and_store_credentials(code_url)
+    if creds:
+        return "Authorization successful! Credentials stored."
+    else:
+        return "Authorization failed."
 
-@app.route("/disconnect")
-def disconnect():
-    drive_oauth.disconnect()
-    return redirect(url_for("home"))
-
-@app.route("/status")
-def status():
-    status_data = status_tracker.get_all_status()
-    return render_template("status.html", status_data=status_data)
+@app.route("/drive_test")
+def drive_test():
+    service = gdrive_auth.get_drive_service()
+    if service:
+        # List first 10 files
+        results = service.files().list(pageSize=10, fields="files(id, name)").execute()
+        items = results.get("files", [])
+        return jsonify(items)
+    else:
+        return "Drive service not available. Authorize first."
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
