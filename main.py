@@ -1,15 +1,8 @@
-# main.py
 import os
-import sys
 import threading
-
-# Add root utils folder to Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), "utils"))
-
-from oauth_drive import get_flow, save_credentials, get_drive_service, load_credentials
-from status_tracker import StatusTracker
-
 from flask import Flask, redirect, request, jsonify
+from src.utils.oauth_drive import get_flow, save_credentials, get_drive_service, load_credentials
+from src.utils.status_tracker import StatusTracker
 
 app = Flask(__name__)
 status_tracker = StatusTracker()
@@ -42,17 +35,23 @@ def status():
     return jsonify(status_tracker.get_status())
 
 # -------------------------
-# Dummy Livestream Monitoring Thread
+# Livestream Monitoring Thread (simulation)
 # -------------------------
 def monitor_livestreams():
     import time
-    usernames = ["example_user1", "example_user2"]  # Replace with reading from usernames.txt
+
     while True:
+        if os.path.exists("usernames.txt"):
+            with open("usernames.txt", "r") as f:
+                usernames = [line.strip() for line in f if line.strip()]
+        else:
+            usernames = []
+
         for user in usernames:
             status_tracker.update_user(
                 username=user,
-                online=True,
-                recording_duration=5,  # seconds
+                online=True,  # simulate online
+                recording_duration=5,
                 last_online="2025-08-28 16:00:00",
                 live_duration=300
             )
@@ -61,7 +60,7 @@ def monitor_livestreams():
 threading.Thread(target=monitor_livestreams, daemon=True).start()
 
 # -------------------------
-# Run App
+# Run Flask
 # -------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
