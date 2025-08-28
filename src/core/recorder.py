@@ -1,23 +1,26 @@
-import subprocess
 import os
-from datetime import datetime
-import pytz
+import datetime
+import ffmpeg
+from src.utils.google_drive_uploader import upload_to_drive
 
-def record_stream(username, output_file):
-    est = pytz.timezone('US/Eastern')
-    now = datetime.now(est)
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+def record_livestream(username, url, status_tracker):
+    date_str = datetime.datetime.now().strftime("%m-%d-%Y")
+    folder_path = os.path.join("recordings", username, date_str)
+    os.makedirs(folder_path, exist_ok=True)
 
-    # ffmpeg command to record livestream
-    ffmpeg_cmd = [
-        "ffmpeg", "-y",
-        "-i", f"https://pull-hls.tiktokcdn.com/stream/{username}.m3u8",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-s", "854x480",
-        "-c:a", "aac",
-        output_file
-    ]
+    count = len(os.listdir(folder_path)) + 1
+    filename = f"{username}-{count}.mp4"
+    filepath = os.path.join(folder_path, filename)
 
-    print(f"[FFMPEG] Starting recording for {username} to {output_file}...")
-    subprocess.run(ffmpeg_cmd)
+    status_tracker.start_recording(username)
+    try:
+        # Actual recording command using ffmpeg
+        (
+            ffmpeg
+            .input(url)
+            .output(filepath, format="mp4", video_bitrate="480k", vcodec="libx264")
+            .run(overwrite_output=True)
+        )
+        upload_to_drive(username, date_str, filepath)
+    finally:
+        status_tracker.stop_recording(username)

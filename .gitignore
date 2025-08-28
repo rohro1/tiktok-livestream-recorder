@@ -1,21 +1,25 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
+*.env
+*.venv
 env/
-.venv/
+venv/
+*.egg-info/
 
-# Logs
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Google credentials
+# Google token & secrets
 token.pkl
-/opt/render/secrets/credentials.json
+credentials.json
 
-# Recordings (optional if you don’t want them in Git)
+# Logs & temp
+*.log
+*.tmp
+
+# Recordings (optional to ignore locally)
 recordings/
+
+# VSCode / IDE
+.vscode/
+.idea/

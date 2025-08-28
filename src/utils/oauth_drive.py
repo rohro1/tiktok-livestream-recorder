@@ -1,35 +1,36 @@
-# src/utils/oauth_drive.py
 import os
 import pickle
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-TOKEN_FILE = os.environ.get("GOOGLE_TOKEN_FILE", "token.pkl")
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+def create_auth_url(credentials_file, scopes, redirect_uri):
+    flow = Flow.from_client_secrets_file(
+        credentials_file,
+        scopes=scopes,
+        redirect_uri=redirect_uri
+    )
+    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    return auth_url
 
-def get_drive_service():
-    """
-    Load credentials from TOKEN_FILE (created by main.py during OAuth flow),
-    refresh if expired, and return a Drive v3 service object.
-    """
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, "rb") as f:
-            creds = pickle.load(f)
+def fetch_and_store_credentials(credentials_file, scopes, redirect_uri, request_url):
+    flow = Flow.from_client_secrets_file(
+        credentials_file,
+        scopes=scopes,
+        redirect_uri=redirect_uri
+    )
+    # The request_url contains the full callback URL with ?code=…
+    flow.fetch_token(authorization_response=request_url)
+    creds = flow.credentials
+    with open("token.pkl", "wb") as f:
+        pickle.dump(creds, f)
+    return creds
 
-    if not creds:
-        raise RuntimeError("No stored Google credentials found. Visit /authorize to connect Google Drive.")
-
-    # Refresh if needed
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        # persist refreshed creds
-        with open(TOKEN_FILE, "wb") as f:
-            pickle.dump(creds, f)
-
-    if not creds.valid:
-        raise RuntimeError("Stored credentials are not valid. Reconnect via /authorize.")
-
-    service = build("drive", "v3", credentials=creds, cache_discovery=False)
+def get_drive_service(credentials=None):
+    if credentials is None:
+        if not os.path.exists("token.pkl"):
+            return None
+        with open("token.pkl", "rb") as f:
+            credentials = pickle.load(f)
+    service = build("drive", "v3", credentials=credentials)
     return service

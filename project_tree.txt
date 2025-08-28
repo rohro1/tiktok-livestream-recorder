@@ -1,14 +1,243 @@
 .
+├── .git
+│   ├── COMMIT_EDITMSG
+│   ├── FETCH_HEAD
+│   ├── HEAD
+│   ├── ORIG_HEAD
+│   ├── config
+│   ├── description
+│   ├── hooks
+│   │   ├── applypatch-msg.sample
+│   │   ├── commit-msg.sample
+│   │   ├── fsmonitor-watchman.sample
+│   │   ├── post-checkout
+│   │   ├── post-commit
+│   │   ├── post-merge
+│   │   ├── post-update.sample
+│   │   ├── pre-applypatch.sample
+│   │   ├── pre-commit.sample
+│   │   ├── pre-merge-commit.sample
+│   │   ├── pre-push
+│   │   ├── pre-push.sample
+│   │   ├── pre-rebase.sample
+│   │   ├── pre-receive.sample
+│   │   ├── prepare-commit-msg.sample
+│   │   ├── push-to-checkout.sample
+│   │   ├── sendemail-validate.sample
+│   │   └── update.sample
+│   ├── index
+│   ├── info
+│   │   └── exclude
+│   ├── lfs
+│   │   ├── cache
+│   │   │   └── locks
+│   │   │       └── refs
+│   │   │           └── heads
+│   │   │               └── main
+│   │   │                   └── verifiable
+│   │   └── tmp
+│   ├── logs
+│   │   ├── HEAD
+│   │   └── refs
+│   │       ├── heads
+│   │       │   └── main
+│   │       └── remotes
+│   │           └── origin
+│   │               ├── HEAD
+│   │               └── main
+│   ├── objects
+│   │   ├── 06
+│   │   │   ├── 14bbd0b2bfa975fe910004522eca87162ea444
+│   │   │   └── 2d3b699fa03ae6b24e335684b59714b1a627d6
+│   │   ├── 07
+│   │   │   └── 098150ae8b8c81354316932220e503d7120de3
+│   │   ├── 19
+│   │   │   └── c0c5aba0412e222bcb5709473bcd0e50d93296
+│   │   ├── 1b
+│   │   │   ├── 8d726e273795727c0fda8bc28446f88bcd5189
+│   │   │   └── b9baccf9a2abd787a7f40e8b3f6676bfb8de9f
+│   │   ├── 25
+│   │   │   └── f0ddbb86dd0f6923c76f01a78f502fbf45ddcd
+│   │   ├── 27
+│   │   │   └── 26c13719d09748f6e435113144da01ca5e06db
+│   │   ├── 2b
+│   │   │   └── 862114fd9592ed1432f4894759ce7c9007cadc
+│   │   ├── 2d
+│   │   │   └── 6dc77d9da2282cdabe5f4b8a40dfb434579e02
+│   │   ├── 2f
+│   │   │   ├── b25f298a590a1d62219a38fbd9c39a92da7cc1
+│   │   │   └── b274b5a41d005118265810314f24f158970003
+│   │   ├── 34
+│   │   │   └── e7384e437f8495156e1e5551da060f25207482
+│   │   ├── 3a
+│   │   │   └── 00fd6c63d0b2ed23b01f38853e1674c0526346
+│   │   ├── 3b
+│   │   │   └── 21b61402b3b9474affa6721910a3e69098d416
+│   │   ├── 3d
+│   │   │   └── 2ecd73b7c219f07d1be4045441b6e56d085d78
+│   │   ├── 3e
+│   │   │   └── 77978502f547099deee73c54d87ffebd58b8ca
+│   │   ├── 3f
+│   │   │   └── 9d82b1fe0194e081786636709ec95de46f42a0
+│   │   ├── 43
+│   │   │   └── 5f364582d31a008f802c44d09b55bdb5949f97
+│   │   ├── 49
+│   │   │   └── 891fc1964a6b410fcaaa2939af1b0813177ac5
+│   │   ├── 4c
+│   │   │   └── 307d9aa227c5d917456fef9ff44bd4e55f00c0
+│   │   ├── 4e
+│   │   │   └── f001a6ba45a435575946ed26ab40fac95cf5a5
+│   │   ├── 5a
+│   │   │   └── 76bcb5fd066f5c97265618d7f85bcd77282a4c
+│   │   ├── 5b
+│   │   │   └── 3f9fcf7f8a84fe56c20f21e2e330346fdc1785
+│   │   ├── 5d
+│   │   │   └── 07501c28ba633eaa65860418034e61e576356b
+│   │   ├── 64
+│   │   │   └── 07ab9570b2c1981137053c67ac41916eb22e7f
+│   │   ├── 73
+│   │   │   └── 16cd26660c3e1857d4d8cf0bc54ffee6e818ae
+│   │   ├── 77
+│   │   │   └── 846d44dc8245f3b13e4b502c7c82b363e27eb6
+│   │   ├── 79
+│   │   │   ├── 4feb3d59ac267f5aed8d388e7c507ec5ea31f8
+│   │   │   ├── 9289bf6d9f4572cabe813ec9e482f0902fa472
+│   │   │   └── a5e23189738fec3a8ac9a0893165d7593c3294
+│   │   ├── 82
+│   │   │   └── 91bb07988d3407f24491f7e8723692e76d76af
+│   │   ├── 83
+│   │   │   └── f6e39715dd7148964d428a92dc3e85ff1a91cb
+│   │   ├── 87
+│   │   │   ├── 0835b91c994fb254c3a195de00b0aa655868ba
+│   │   │   └── 73244219851fff005d8dff37231e23d31b1db7
+│   │   ├── 88
+│   │   │   └── 5c7ed6306551e829626b4e713efe51e0ded7c4
+│   │   ├── 91
+│   │   │   └── 4f066d6eed8dfc6a3615484ae4eddea8de168b
+│   │   ├── 96
+│   │   │   └── e177671e86e8dcd12b9d0bee789508db74c472
+│   │   ├── 98
+│   │   │   └── 53f23e7d7753249736493a6820e32721284fa4
+│   │   ├── a1
+│   │   │   └── 4e93dac2fb3033b49e38adf37967b5ae296681
+│   │   ├── aa
+│   │   │   └── 717ac5241aae193011c034af03fa08b9fe449d
+│   │   ├── b5
+│   │   │   └── 4b341441311b47b978a4ba6d9c0121968e1647
+│   │   ├── b9
+│   │   │   └── 7ae57679d752f57524a3ba4c370f0d61ce5859
+│   │   ├── bd
+│   │   │   └── 3c7f6ea3723b240d543f76d0bbd465cad4a332
+│   │   ├── be
+│   │   │   └── 9d28081ba15a44b07d46cf7d5e74d5201fe783
+│   │   ├── c0
+│   │   │   └── f0cddfe57c482c95d7932284d878e977785635
+│   │   ├── c2
+│   │   │   └── 248bd4fdf384c1166aa1d264e7d2df65bac87f
+│   │   ├── c8
+│   │   │   ├── 77b4cc07d0af48a722806acf39a62a8e53cdb5
+│   │   │   └── 9c90b3a73a1042cd174c275a12bf1f67d55887
+│   │   ├── ca
+│   │   │   └── f63973c8ab35d47ff1524f466825d9a51e7c68
+│   │   ├── cb
+│   │   │   └── 93a884174bf8e6daf615b89dbac041d1cbeee6
+│   │   ├── d0
+│   │   │   └── 6fe343c5c024b86a27877f23d98e73a2095a54
+│   │   ├── d7
+│   │   │   └── 56dc91f7b4c648fe46a2db16f817664ba9aaa7
+│   │   ├── db
+│   │   │   └── fb4cc824f3a0843a98493bf27cafae125f517a
+│   │   ├── e1
+│   │   │   └── 07138012f51338ec185202f5c2d50f51bc9811
+│   │   ├── e4
+│   │   │   ├── a754c2773c57b47964f25e39c46a671f54587c
+│   │   │   └── b355b626c03ea576bb4ecebe10b03767d9c382
+│   │   ├── e6
+│   │   │   ├── 3ea425b13765db63d89c16a307dd6349ddbce5
+│   │   │   └── 9de29bb2d1d6434b8b29ae775ad8c2e48c5391
+│   │   ├── eb
+│   │   │   └── 5bc1d931c7870de344bddbeb60a254a997bbd2
+│   │   ├── ec
+│   │   │   └── ef872c25b203d46e89945a7a055792593c5c41
+│   │   ├── ed
+│   │   │   └── 8a0aa5cc4700fe4a2f0219788b84d000ef66b2
+│   │   ├── f0
+│   │   │   └── 8101d1e2a1edf9d71272cfd461df02d80dbf1a
+│   │   ├── f2
+│   │   │   └── 593e570b47db371f7ca0e1380a1c6b64fee011
+│   │   ├── f4
+│   │   │   └── 804ea5a36598a00463aeb4b367a3d3839756fb
+│   │   ├── f7
+│   │   │   └── eda1e770c37824525f5a7b31b7ecf91b1ebc45
+│   │   ├── f9
+│   │   │   └── 0c95ae980f8a551d806c071d94b5ffba251097
+│   │   ├── info
+│   │   └── pack
+│   │       ├── pack-1ec2d91d943d1adb8fcdbe0df65848f126cb1965.idx
+│   │       ├── pack-1ec2d91d943d1adb8fcdbe0df65848f126cb1965.pack
+│   │       └── pack-1ec2d91d943d1adb8fcdbe0df65848f126cb1965.rev
+│   ├── packed-refs
+│   └── refs
+│       ├── heads
+│       │   └── main
+│       ├── remotes
+│       │   └── origin
+│       │       ├── HEAD
+│       │       └── main
+│       └── tags
+├── .github
+│   └── workflows
+│       └── auto_commit.yml
+├── .gitignore
+├── auto_commit.py
+├── hello.txt
 ├── main.py
 ├── project_tree.txt
+├── recorder_worker.py
+├── recordings
+│   ├── # Example: edit it with your usernames
+│   │   └── 08-27-2025
+│   ├── U
+│   │   └── 08-27-2025
+│   ├── baba_king_offia1
+│   │   └── 08-27-2025
+│   ├── cat > usernames.txt <<'U'
+│   │   └── 08-27-2025
+│   ├── git add usernames.txt
+│   │   └── 08-27-2025
+│   ├── git commit -m "Add usernames.txt sample"
+│   │   └── 08-27-2025
+│   ├── johora
+│   │   └── 08-27-2025
+│   ├── justdoyoubro
+│   │   └── 08-27-2025
+│   ├── mubarakdewan7
+│   │   └── 08-27-2025
+│   ├── peatown_973
+│   │   └── 08-27-2025
+│   ├── s.nemz
+│   │   └── 08-27-2025
+│   └── yeahitsme
+│       └── 08-27-2025
 ├── requirements.txt
+├── sample.mp4
 ├── src
-│   └── core
-│       ├── recorder.py
-│       ├── tiktok_api.py
-│       └── tiktok_recorder.py
-└── templates
-    └── status.html
+│   ├── __init__.py
+│   ├── core
+│   │   ├── __init__.py
+│   │   ├── recorder.py
+│   │   ├── tiktok_api.py
+│   │   └── tiktok_recorder.py
+│   └── utils
+│       ├── folder_manager.py
+│       ├── google_drive_uploader.py
+│       ├── oauth_drive.py
+│       └── status_tracker.py
+├── templates
+│   └── status.html
+├── test_upload.py
+├── test_upload.txt
+├── test_video.mp4
+└── usernames.txt
 
-    4 directories, 7 files
-    
+113 directories, 128 files

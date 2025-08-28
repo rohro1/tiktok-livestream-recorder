@@ -1,13 +1,4 @@
-# Example: edit it with your usernames
-cat > usernames.txt <<'U'
 baba_king_offia1
 mubarakdewan7
 yeahitsme
 justdoyoubro
-peatown_973
-s.nemz
-johora
-U
-
-git add usernames.txt
-git commit -m "Add usernames.txt sample"
