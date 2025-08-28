@@ -1,8 +1,9 @@
-cat > requirements.txt <<'REQ'
-Flask>=2.0
-httpx>=0.23
-# Add other libs you need later (google libs for Drive upload, etc.)
-REQ
-
-git add requirements.txt
-git commit -m "Update requirements: Flask and httpx"
+Flask
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+requests
+pytz
+TikTokLive
+ffmpeg-python
