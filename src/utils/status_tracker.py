@@ -1,40 +1,20 @@
-# src/utils/status_tracker.py
-
+# utils/status_tracker.py
 import threading
-from datetime import datetime
 
 class StatusTracker:
     def __init__(self):
-        self.lock = threading.Lock()
-        self.statuses = {}  # {username: {"online": bool, "recording": bool, "start_time": datetime, "last_online": datetime, "duration": int}}
+        self._lock = threading.Lock()
+        self._data = {}
 
-    def set_online(self, username):
-        with self.lock:
-            now = datetime.now()
-            if username not in self.statuses:
-                self.statuses[username] = {}
-            self.statuses[username]["online"] = True
-            self.statuses[username]["recording"] = True
-            self.statuses[username]["start_time"] = now
-            self.statuses[username]["last_online"] = now
-            self.statuses[username]["duration"] = 0
-
-    def set_offline(self, username):
-        with self.lock:
-            now = datetime.now()
-            if username not in self.statuses:
-                self.statuses[username] = {}
-            self.statuses[username]["online"] = False
-            self.statuses[username]["recording"] = False
-            self.statuses[username]["last_online"] = now
-            start_time = self.statuses[username].get("start_time")
-            if start_time:
-                self.statuses[username]["duration"] = int((now - start_time).total_seconds())
+    def update_user(self, username, online=False, recording_duration=0, last_online=None, live_duration=0):
+        with self._lock:
+            self._data[username] = {
+                "online": online,
+                "recording_duration": recording_duration,
+                "last_online": last_online,
+                "live_duration": live_duration
+            }
 
     def get_status(self):
-        with self.lock:
-            # Return a copy to avoid threading issues
-            return {u: s.copy() for u, s in self.statuses.items()}
-
-# Singleton instance for main.py
-status_tracker = StatusTracker()
+        with self._lock:
+            return self._data.copy()
