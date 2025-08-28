@@ -4,48 +4,47 @@ import os
 import pickle
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 
-# Path to store credentials
-CREDENTIALS_FILE = "credentials.json"  # Your OAuth client credentials file
-TOKEN_PICKLE = "token.pickle"
-
-# Redirect URI must match what is set in Google Cloud Console
-REDIRECT_URI = "https://tiktok-livestream-recorder.onrender.com/oauth2callback"
-
+# Path to your OAuth client secret JSON
+CLIENT_SECRETS_FILE = "credentials.json"
+# Path to store user's credentials after authorization
+TOKEN_FILE = "token.json"
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
-
+# -------------------------
+# OAuth Flow
+# -------------------------
 def get_flow():
-    """Create a new OAuth2 flow instance."""
+    """Create a Flow object for Google OAuth."""
     return Flow.from_client_secrets_file(
-        CREDENTIALS_FILE,
+        CLIENT_SECRETS_FILE,
         scopes=SCOPES,
-        redirect_uri=REDIRECT_URI,
+        redirect_uri=os.environ.get("OAUTH_REDIRECT_URI")  # must match your Render env var
     )
 
-
+# -------------------------
+# Save / Load Credentials
+# -------------------------
 def save_credentials(credentials):
-    """Save user credentials to token.pickle."""
-    with open(TOKEN_PICKLE, "wb") as token:
-        pickle.dump(credentials, token)
+    """Save Google credentials to TOKEN_FILE."""
+    with open(TOKEN_FILE, "wb") as f:
+        pickle.dump(credentials, f)
 
-
-def get_drive_service():
-    """Return an authorized Google Drive API service instance."""
-    creds = None
-    # Load saved credentials
-    if os.path.exists(TOKEN_PICKLE):
-        with open(TOKEN_PICKLE, "rb") as token:
-            creds = pickle.load(token)
-
-    # Refresh token if expired
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        save_credentials(creds)
-
-    # Build Drive API service
-    if creds:
-        return build("drive", "v3", credentials=creds)
-    else:
+def load_credentials():
+    """Load Google credentials from TOKEN_FILE."""
+    if not os.path.exists(TOKEN_FILE):
         return None
+    with open(TOKEN_FILE, "rb") as f:
+        creds = pickle.load(f)
+    return creds
+
+# -------------------------
+# Google Drive Service
+# -------------------------
+def get_drive_service():
+    """Return a Google Drive service object."""
+    creds = load_credentials()
+    if not creds:
+        raise Exception("Google Drive credentials not found. Please authorize first.")
+    return build("drive", "v3", credentials=creds)

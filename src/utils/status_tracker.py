@@ -7,7 +7,6 @@ from datetime import datetime
 class StatusTracker:
     def __init__(self):
         self.lock = threading.Lock()
-        # Structure: {username: {"online": bool, "recording": bool, "start_time": datetime, "last_online": datetime, "duration": str}}
         self.status = {}
 
     def set_online(self, username: str):
@@ -39,7 +38,6 @@ class StatusTracker:
 
     def get_status(self):
         with self.lock:
-            # Update durations before returning
             for user in self.status.keys():
                 self.update_duration(user)
             return self.status.copy()
