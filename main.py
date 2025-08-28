@@ -1,12 +1,17 @@
 # main.py
 import os
+import sys
 import threading
+
+# Add root utils folder to Python path
+sys.path.append(os.path.join(os.path.dirname(__file__), "utils"))
+
+from oauth_drive import get_flow, save_credentials, get_drive_service, load_credentials
+from status_tracker import StatusTracker
+
 from flask import Flask, redirect, request, jsonify
-from utils.oauth_drive import get_flow, save_credentials, get_drive_service, load_credentials
-from utils.status_tracker import StatusTracker
 
 app = Flask(__name__)
-
 status_tracker = StatusTracker()
 
 # -------------------------
@@ -41,18 +46,17 @@ def status():
 # -------------------------
 def monitor_livestreams():
     import time
-    usernames = ["example_user1", "example_user2"]  # Replace with usernames.txt logic if needed
+    usernames = ["example_user1", "example_user2"]  # Replace with reading from usernames.txt
     while True:
         for user in usernames:
-            # Simulate online/offline and recording duration
             status_tracker.update_user(
                 username=user,
                 online=True,
-                recording_duration=5,  # seconds, just example
+                recording_duration=5,  # seconds
                 last_online="2025-08-28 16:00:00",
                 live_duration=300
             )
-        time.sleep(10)  # check every 10 seconds
+        time.sleep(10)
 
 threading.Thread(target=monitor_livestreams, daemon=True).start()
 
