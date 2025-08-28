@@ -8,6 +8,13 @@ app = Flask(__name__)
 status_tracker = StatusTracker()
 
 # -------------------------
+# Root Route
+# -------------------------
+@app.route("/")
+def home():
+    return redirect("/status")  # or return a message
+
+# -------------------------
 # OAuth Routes
 # -------------------------
 @app.route("/authorize")
