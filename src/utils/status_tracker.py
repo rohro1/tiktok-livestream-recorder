@@ -1,29 +1,28 @@
-import datetime
+import threading
 
 class StatusTracker:
     def __init__(self):
+        self.lock = threading.Lock()
         self.status = {}
 
-    def update(self, username, online, recording):
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if username not in self.status:
+    def update_status(self, username, online=False, recording_duration="--", last_online="--", last_duration="--"):
+        with self.lock:
             self.status[username] = {
                 "online": online,
-                "recording": recording,
-                "last_online": now if online else "",
-                "last_duration": ""
+                "recording_duration": recording_duration,
+                "last_online": last_online,
+                "last_duration": last_duration,
             }
-        else:
-            data = self.status[username]
-            if online:
-                if not data["online"]:
-                    data["last_online"] = now
-                data["online"] = True
-                data["recording"] = recording
-            else:
-                if data["online"]:
-                    data["last_duration"] = f"Ended at {now}"
-                data["online"] = False
-                data["recording"] = recording
 
-status_tracker = StatusTracker()
+    def get_status(self, username):
+        with self.lock:
+            return self.status.get(username, {
+                "online": False,
+                "recording_duration": "--",
+                "last_online": "--",
+                "last_duration": "--"
+            })
+
+    def get_all_statuses(self):
+        with self.lock:
+            return dict(self.status)

@@ -1,77 +1,110 @@
 import os
 import threading
+import datetime
 import time
-from flask import Flask, redirect, url_for, render_template_string
+from flask import Flask, redirect, request, session, url_for, render_template_string
 
-# Corrected imports
-from src.utils.oauth_drive import get_drive_service
-from src.utils.status_tracker import status_tracker
-from src.core.tiktok_api import TikTokAPI
-from src.core.recorder import Recorder
+from src.utils.oauth_drive import get_flow, set_credentials, get_drive_service
+from src.utils.status_tracker import StatusTracker
 
+# --- Flask setup ---
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersecret")
 
-drive_service = None
-recorders = {}
-tiktok_api = TikTokAPI()
+status_tracker = StatusTracker()
 
-@app.route("/")
-def index():
-    if drive_service:
-        return redirect(url_for("status"))
-    return '<a href="/authorize">Authorize Google Drive</a>'
-
+# --- Google Drive OAuth Routes ---
 @app.route("/authorize")
 def authorize():
-    from src.utils.oauth_drive import authorize_url
-    return redirect(authorize_url())
+    flow = get_flow()
+    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    return redirect(auth_url)
+
 
 @app.route("/oauth2callback")
 def oauth2callback():
-    global drive_service
-    from src.utils.oauth_drive import oauth2callback_handler
-    drive_service = oauth2callback_handler()
-    return "Google Drive authorization completed! <a href='/status'>Go to Status</a>"
+    flow = get_flow()
+    flow.fetch_token(authorization_response=request.url)
 
+    if not flow.credentials:
+        return "Authorization failed.", 400
+
+    # Save credentials
+    set_credentials(flow.credentials)
+
+    session["credentials"] = True
+    return redirect(url_for("status"))
+
+
+# --- Status Page ---
 @app.route("/status")
 def status():
-    template = """
+    creds_ok = "Yes" if "credentials" in session else "No"
+
+    # build HTML for each tracked user
+    statuses = status_tracker.get_all_statuses()
+    user_rows = ""
+    for username, info in statuses.items():
+        user_rows += f"""
+        <tr>
+            <td>{username}</td>
+            <td>{"🟢 Online" if info['online'] else "⚪ Offline"}</td>
+            <td>{info['recording_duration']}</td>
+            <td>{info['last_online']}</td>
+            <td>{info['last_duration']}</td>
+        </tr>
+        """
+
+    html = f"""
     <h1>TikTok Livestream Recorder Status</h1>
-    {% if not drive_service %}
-        <p>Google Drive not authorized. <a href='/authorize'>Authorize here</a></p>
-    {% else %}
-        <p>Google Drive authorization completed!</p>
-        <table border="1" cellpadding="5">
-            <tr><th>Username</th><th>Status</th><th>Recording</th><th>Last Online</th><th>Last Duration</th></tr>
-            {% for user, data in status_data.items() %}
-            <tr>
-                <td>{{ user }}</td>
-                <td>{{ "ONLINE" if data.online else "OFFLINE" }}</td>
-                <td>{{ data.recording }}</td>
-                <td>{{ data.last_online }}</td>
-                <td>{{ data.last_duration }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-    {% endif %}
+    <p>Google Drive Authorized: {creds_ok}</p>
+    <table border="1" cellpadding="6">
+        <tr>
+            <th>Username</th>
+            <th>Status</th>
+            <th>Recording Duration</th>
+            <th>Last Online</th>
+            <th>Last Duration</th>
+        </tr>
+        {user_rows}
+    </table>
     """
-    return render_template_string(template, drive_service=drive_service, status_data=status_tracker.status)
+    return render_template_string(html)
 
-def monitor_users():
+
+# --- Background Monitor (dummy for now) ---
+def background_monitor():
+    """
+    Simulates livestream detection and updates the tracker.
+    Replace this with real TikTok API detection + recorder.
+    """
+    usernames_file = "usernames.txt"
+
     while True:
-        if drive_service:
-            with open("usernames.txt") as f:
+        if os.path.exists(usernames_file):
+            with open(usernames_file, "r") as f:
                 usernames = [line.strip() for line in f if line.strip()]
+        else:
+            usernames = []
 
-            for username in usernames:
-                if username not in recorders:
-                    recorders[username] = Recorder(username, drive_service)
+        for u in usernames:
+            # fake online toggle
+            now = datetime.datetime.now().strftime("%H:%M:%S")
+            status_tracker.update_status(
+                username=u,
+                online=True,
+                recording_duration=f"{now} running",
+                last_online=now,
+                last_duration="--"
+            )
 
-                is_live = tiktok_api.is_user_live(username)
-                recorders[username].update_status(is_live)
+        time.sleep(30)  # check every 30 sec
 
-        time.sleep(300)  # every 5 minutes
 
 if __name__ == "__main__":
-    threading.Thread(target=monitor_users, daemon=True).start()
+    # start background monitor
+    t = threading.Thread(target=background_monitor, daemon=True)
+    t.start()
+
+    # run web server
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

@@ -1,44 +1,51 @@
 import os
 import pickle
-from flask import session, redirect, url_for
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 
-# OAuth 2.0 settings
+# Path to store token
+TOKEN_PICKLE = "token.pickle"
+
+# Your redirect URI on Render
+REDIRECT_URI = "https://tiktok-livestream-recorder.onrender.com/oauth2callback"
+
+# Scopes for Google Drive
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-CLIENT_SECRETS_FILE = "credentials.json"
+
 
 def get_flow():
-    """
-    Create the OAuth Flow object configured for Render deployment.
-    """
+    """Create OAuth Flow for Google Drive."""
     return Flow.from_client_secrets_file(
-        CLIENT_SECRETS_FILE,
+        "credentials.json",
         scopes=SCOPES,
-        redirect_uri="https://tiktok-livestream-recorder.onrender.com/oauth2callback"
+        redirect_uri=REDIRECT_URI,
     )
 
-def get_drive_service():
-    """
-    Returns an authorized Drive API service instance.
-    Uses session-stored credentials if available.
-    """
+
+def save_credentials(credentials):
+    """Save user credentials to token.pickle."""
+    with open(TOKEN_PICKLE, "wb") as token:
+        pickle.dump(credentials, token)
+
+
+def load_credentials():
+    """Load stored user credentials if available and valid."""
     creds = None
+    if os.path.exists(TOKEN_PICKLE):
+        with open(TOKEN_PICKLE, "rb") as token:
+            creds = pickle.load(token)
 
-    # Load from session if present
-    if "credentials" in session:
-        creds = pickle.loads(session["credentials"])
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        save_credentials(creds)
 
-    # If no valid creds, redirect to /authorize
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            return redirect(url_for("authorize"))
+    return creds
 
-    # Save back refreshed creds
-    session["credentials"] = pickle.dumps(creds)
 
-    # Build Drive client
+def get_drive_service():
+    """Return Google Drive API service if authorized, else None."""
+    creds = load_credentials()
+    if not creds:
+        return None
     return build("drive", "v3", credentials=creds)
