@@ -1,51 +1,48 @@
 import os
-import pickle
+import json
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 
-# Path to store token
-TOKEN_PICKLE = "token.pickle"
+# Paths
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CREDENTIALS_FILE = os.path.join(BASE_DIR, "../../credentials.json")  # Google OAuth client secrets
+TOKEN_FILE = os.path.join(BASE_DIR, "../../token.json")              # Where tokens are saved
 
-# Your redirect URI on Render
-REDIRECT_URI = "https://tiktok-livestream-recorder.onrender.com/oauth2callback"
-
-# Scopes for Google Drive
+# Google Drive scope
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+
+# Fixed redirect URI (must match your Google Cloud OAuth setup)
+REDIRECT_URI = "https://tiktok-livestream-recorder.onrender.com/oauth2callback"
 
 
 def get_flow():
-    """Create OAuth Flow for Google Drive."""
+    """Create a Google OAuth Flow object with fixed redirect URI."""
     return Flow.from_client_secrets_file(
-        "credentials.json",
+        CREDENTIALS_FILE,
         scopes=SCOPES,
-        redirect_uri=REDIRECT_URI,
+        redirect_uri=REDIRECT_URI
     )
 
 
-def save_credentials(credentials):
-    """Save user credentials to token.pickle."""
-    with open(TOKEN_PICKLE, "wb") as token:
-        pickle.dump(credentials, token)
+def set_credentials(credentials):
+    """Save Google OAuth credentials to token.json."""
+    with open(TOKEN_FILE, "w") as token:
+        token.write(credentials.to_json())
 
 
-def load_credentials():
-    """Load stored user credentials if available and valid."""
-    creds = None
-    if os.path.exists(TOKEN_PICKLE):
-        with open(TOKEN_PICKLE, "rb") as token:
-            creds = pickle.load(token)
-
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        save_credentials(creds)
-
-    return creds
+def get_credentials():
+    """Load saved credentials if they exist and are valid."""
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        if creds and creds.valid:
+            return creds
+    return None
 
 
 def get_drive_service():
-    """Return Google Drive API service if authorized, else None."""
-    creds = load_credentials()
+    """Return an authorized Google Drive API service object."""
+    creds = get_credentials()
     if not creds:
-        return None
+        raise Exception("No valid credentials. Please authorize via /authorize.")
     return build("drive", "v3", credentials=creds)
