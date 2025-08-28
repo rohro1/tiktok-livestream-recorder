@@ -2,99 +2,76 @@ import os
 import threading
 import time
 from flask import Flask, redirect, url_for, render_template_string
+
+# Corrected imports
 from src.utils.oauth_drive import get_drive_service
-from utils.status_tracker import status_tracker
+from src.utils.status_tracker import status_tracker
 from src.core.tiktok_api import TikTokAPI
 from src.core.recorder import Recorder
 
 app = Flask(__name__)
 
-# --- Background TikTok monitor ---
-def monitor_usernames():
-    api = TikTokAPI()
-    while True:
-        if os.path.exists("usernames.txt"):
-            with open("usernames.txt", "r") as f:
-                usernames = [line.strip() for line in f if line.strip()]
-        else:
-            usernames = []
+drive_service = None
+recorders = {}
+tiktok_api = TikTokAPI()
 
-        for username in usernames:
-            try:
-                live_info = api.is_live(username)
-                if live_info["is_live"]:
-                    if not status_tracker.is_recording(username):
-                        recorder = Recorder(username, live_info["url"])
-                        t = threading.Thread(target=recorder.start_recording)
-                        t.start()
-                        status_tracker.set_online(username, True)
-                else:
-                    status_tracker.set_online(username, False)
-            except Exception as e:
-                print(f"Error checking {username}: {e}")
-
-        time.sleep(300)  # check every 5 minutes
-
-
-# --- Web routes ---
 @app.route("/")
 def index():
-    return redirect(url_for("status"))
+    if drive_service:
+        return redirect(url_for("status"))
+    return '<a href="/authorize">Authorize Google Drive</a>'
+
+@app.route("/authorize")
+def authorize():
+    from src.utils.oauth_drive import authorize_url
+    return redirect(authorize_url())
+
+@app.route("/oauth2callback")
+def oauth2callback():
+    global drive_service
+    from src.utils.oauth_drive import oauth2callback_handler
+    drive_service = oauth2callback_handler()
+    return "Google Drive authorization completed! <a href='/status'>Go to Status</a>"
 
 @app.route("/status")
 def status():
-    statuses = status_tracker.get_all_statuses()
-    html = """
-    <html>
-    <head>
-        <title>TikTok Livestream Recorder Status</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 30px; }
-            h1 { color: #333; }
-            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-            th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-            th { background-color: #f4f4f4; }
-            tr:nth-child(even) { background-color: #f9f9f9; }
-            .online { color: green; font-weight: bold; }
-            .offline { color: red; font-weight: bold; }
-        </style>
-    </head>
-    <body>
-        <h1>TikTok Livestream Recorder Status</h1>
-        {% if statuses %}
-        <table>
-            <tr>
-                <th>Username</th>
-                <th>Status</th>
-                <th>Recording</th>
-                <th>Current Duration</th>
-                <th>Last Seen Online</th>
-                <th>Last Live Duration</th>
-            </tr>
-            {% for user, info in statuses.items() %}
+    template = """
+    <h1>TikTok Livestream Recorder Status</h1>
+    {% if not drive_service %}
+        <p>Google Drive not authorized. <a href='/authorize'>Authorize here</a></p>
+    {% else %}
+        <p>Google Drive authorization completed!</p>
+        <table border="1" cellpadding="5">
+            <tr><th>Username</th><th>Status</th><th>Recording</th><th>Last Online</th><th>Last Duration</th></tr>
+            {% for user, data in status_data.items() %}
             <tr>
                 <td>{{ user }}</td>
-                <td class="{{ 'online' if info.online else 'offline' }}">
-                    {{ "Online" if info.online else "Offline" }}
-                </td>
-                <td>{{ "Yes" if info.recording else "No" }}</td>
-                <td>{{ info.duration if info.duration else "-" }}</td>
-                <td>{{ info.last_seen if info.last_seen else "-" }}</td>
-                <td>{{ info.last_duration if info.last_duration else "-" }}</td>
+                <td>{{ "ONLINE" if data.online else "OFFLINE" }}</td>
+                <td>{{ data.recording }}</td>
+                <td>{{ data.last_online }}</td>
+                <td>{{ data.last_duration }}</td>
             </tr>
             {% endfor %}
         </table>
-        {% else %}
-        <p>No usernames are being tracked yet. Add them to <b>usernames.txt</b>.</p>
-        {% endif %}
-    </body>
-    </html>
+    {% endif %}
     """
-    return render_template_string(html, statuses=statuses)
+    return render_template_string(template, drive_service=drive_service, status_data=status_tracker.status)
 
+def monitor_users():
+    while True:
+        if drive_service:
+            with open("usernames.txt") as f:
+                usernames = [line.strip() for line in f if line.strip()]
+
+            for username in usernames:
+                if username not in recorders:
+                    recorders[username] = Recorder(username, drive_service)
+
+                is_live = tiktok_api.is_user_live(username)
+                recorders[username].update_status(is_live)
+
+        time.sleep(300)  # every 5 minutes
 
 if __name__ == "__main__":
-    # Start background monitoring in a thread
-    t = threading.Thread(target=monitor_usernames, daemon=True)
-    t.start()
+    threading.Thread(target=monitor_users, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
