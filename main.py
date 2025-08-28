@@ -1,66 +1,98 @@
+# main.py
+from flask import Flask, redirect, request, session
+from google_auth_oauthlib.flow import Flow
+from flask_session import Session
 import os
-import threading
-import time
-from flask import Flask, redirect, jsonify
-from datetime import datetime
-from src.core.tiktok_api import is_user_live
-from src.core.recorder import record_stream
-from src.utils.status_tracker import tracker
-from src.utils.folder_manager import get_or_create_user_folder
-from src.utils.google_drive_uploader import upload_file_to_drive
+import pickle
+import logging
 
-CHECK_INTERVAL = 300  # 5 minutes
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("tiktok-recorder")
+
 app = Flask(__name__)
 
-def monitor_user(username):
-    while True:
-        try:
-            print(f"[CHECK] Checking if {username} is live...")
-            if is_user_live(username):
-                if not tracker.is_recording(username):
-                    tracker.set_online(username, True)
-                    tracker.start_recording(username)
+# ---------- Config ----------
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "change_this_to_a_random_value")
+app.config["SESSION_TYPE"] = "filesystem"                # store session server-side so state isn't lost
+app.config["SESSION_FILE_DIR"] = os.environ.get("SESSION_FILE_DIR", "/tmp/flask_session")
+app.config["SESSION_PERMANENT"] = False
+Session(app)
 
-                    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    base_folder = get_or_create_user_folder(username)
-                    date_folder = os.path.join(base_folder, datetime.now().strftime("%m-%d-%Y"))
-                    os.makedirs(date_folder, exist_ok=True)
-                    output_file = os.path.join(date_folder, f"{timestamp}.mp4")
+# Google OAuth settings
+DEFAULT_CLIENT_SECRETS_PATH = "/etc/secrets/credentials.json"
+GOOGLE_CLIENT_SECRETS_FILE = os.environ.get(
+    "GOOGLE_CLIENT_SECRETS_FILE",
+    DEFAULT_CLIENT_SECRETS_PATH if os.path.exists(DEFAULT_CLIENT_SECRETS_PATH) else "credentials.json"
+)
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+TOKEN_FILE = os.environ.get("GOOGLE_TOKEN_FILE", "token.pkl")
+REDIRECT_ROUTE = "/oauth2callback"
 
-                    print(f"[RECORDING] Actively recording {username} -> {output_file}")
-                    record_stream(username, output_file)
-                    tracker.stop_recording(username)
+# ---------- Helpers ----------
+def get_redirect_uri():
+    # Build a redirect URI that matches your Render domain's /oauth2callback
+    return request.url_root.rstrip("/") + REDIRECT_ROUTE
 
-                    # Upload to Google Drive
-                    upload_file_to_drive(output_file, username)
-                else:
-                    print(f"[INFO] {username} is already being recorded.")
-            else:
-                tracker.set_offline(username, False)
-        except Exception as e:
-            print(f"[ERROR] Failed to check or record {username}: {e}")
-        time.sleep(CHECK_INTERVAL)
-
-def start_monitoring():
-    if not os.path.exists("usernames.txt"):
-        print("[ERROR] usernames.txt not found.")
-        return
-
-    with open("usernames.txt", "r") as f:
-        usernames = [line.strip() for line in f if line.strip()]
-
-    for username in usernames:
-        tracker.initialize(username)
-        threading.Thread(target=monitor_user, args=(username,), daemon=True).start()
-
+# ---------- Routes ----------
 @app.route("/")
 def index():
-    return redirect("/status")
+    connected = os.path.exists(TOKEN_FILE)
+    return (
+        f"✅ TikTok Recorder running. Drive connected: {connected}. "
+        f"<a href='/authorize'>Connect Google Drive</a> | <a href='/logout'>Disconnect</a>"
+    )
 
-@app.route("/status")
-def status():
-    return jsonify(tracker.get_all_status())
+@app.route("/authorize")
+def authorize():
+    # Start OAuth flow
+    flow = Flow.from_client_secrets_file(
+        GOOGLE_CLIENT_SECRETS_FILE,
+        scopes=SCOPES,
+        redirect_uri=get_redirect_uri()
+    )
+    auth_url, state = flow.authorization_url(
+        access_type="offline", include_granted_scopes="true", prompt="consent"
+    )
+    session["state"] = state
+    logger.info("Redirecting user to Google auth URL")
+    return redirect(auth_url)
 
+@app.route(REDIRECT_ROUTE)
+def oauth2callback():
+    state = session.get("state")
+    if not state:
+        return "Missing OAuth state in session. Start at /authorize.", 400
+
+    flow = Flow.from_client_secrets_file(
+        GOOGLE_CLIENT_SECRETS_FILE,
+        scopes=SCOPES,
+        state=state,
+        redirect_uri=get_redirect_uri()
+    )
+    # Exchange code for tokens
+    flow.fetch_token(authorization_response=request.url)
+    creds = flow.credentials
+
+    # Persist credentials to disk for use by the background recorder/uploader
+    with open(TOKEN_FILE, "wb") as f:
+        pickle.dump(creds, f)
+
+    session.pop("state", None)
+    logger.info("OAuth success — credentials saved to %s", TOKEN_FILE)
+    return "🎉 Google Drive connected successfully! You can close this tab."
+
+@app.route("/logout")
+def logout():
+    try:
+        if os.path.exists(TOKEN_FILE):
+            os.remove(TOKEN_FILE)
+            logger.info("Removed token file %s", TOKEN_FILE)
+    except Exception:
+        logger.exception("Failed to remove token file")
+    session.clear()
+    return "Logged out and token cleared. Reconnect at /authorize."
+
+# ---------- run ----------
 if __name__ == "__main__":
-    start_monitoring()
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)

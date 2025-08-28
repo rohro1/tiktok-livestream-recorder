@@ -1,31 +1,48 @@
+# src/utils/google_drive_uploader.py
 import os
-from googleapiclient.discovery import build
+from datetime import datetime
+from typing import Optional
 from googleapiclient.http import MediaFileUpload
-from google.oauth2.service_account import Credentials
+from src.utils.oauth_drive import get_drive_service
 
-SCOPES = ["https://www.googleapis.com/auth/drive"]
-SERVICE_ACCOUNT_FILE = "credentials.json"
-
-creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-service = build("drive", "v3", credentials=creds)
-
-def get_or_create_folder(folder_name, parent_id=None):
-    query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder'"
+def _get_or_create_folder(service, name, parent_id=None):
+    """Return folder id for folder with given name (create if missing)."""
+    query = f"name = '{name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     if parent_id:
         query += f" and '{parent_id}' in parents"
-    results = service.files().list(q=query, spaces='drive', fields="files(id, name)").execute()
-    items = results.get('files', [])
-    if items:
-        return items[0]['id']
-    file_metadata = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
-    if parent_id:
-        file_metadata["parents"] = [parent_id]
-    folder = service.files().create(body=file_metadata, fields="id").execute()
-    return folder.get("id")
 
-def upload_file_to_drive(file_path, username):
-    parent_id = get_or_create_folder(username)
-    media = MediaFileUpload(file_path, resumable=True)
-    file_metadata = {"name": os.path.basename(file_path), "parents": [parent_id]}
-    service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-    print(f"[UPLOAD] Uploaded {file_path} to Google Drive")
+    resp = service.files().list(q=query, fields="files(id, name)").execute()
+    items = resp.get("files", [])
+    if items:
+        return items[0]["id"]
+
+    metadata = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
+    if parent_id:
+        metadata["parents"] = [parent_id]
+
+    folder = service.files().create(body=metadata, fields="id").execute()
+    return folder["id"]
+
+def upload_file_to_drive(username: str, file_path: str, mime_type: Optional[str] = None) -> dict:
+    """
+    Uploads a file to Drive under TikTokRecordings/username/YYYY-MM-DD/.
+    Returns created file resource dict.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    service = get_drive_service()  # build/refreshes credentials here
+
+    date_folder = datetime.now().strftime("%Y-%m-%d")
+    root_folder = "TikTokRecordings"
+
+    root_id = _get_or_create_folder(service, root_folder, None)
+    user_id = _get_or_create_folder(service, username, root_id)
+    date_id = _get_or_create_folder(service, date_folder, user_id)
+
+    metadata = {"name": os.path.basename(file_path), "parents": [date_id]}
+    media = MediaFileUpload(file_path, mimetype=mime_type or "video/mp4", resumable=True)
+
+    created = service.files().create(body=metadata, media_body=media, fields="id,name").execute()
+    print(f"✅ Uploaded {file_path} to {root_folder}/{username}/{date_folder}")
+    return created
