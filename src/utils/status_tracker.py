@@ -1,5 +1,3 @@
-# src/utils/status_tracker.py
-
 class StatusTracker:
     def __init__(self):
         self._statuses = {}

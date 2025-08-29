@@ -3,8 +3,8 @@ from flask import Flask, redirect, url_for, request, render_template
 from src.utils.oauth_drive import get_flow, save_credentials, load_credentials, get_drive_service
 from src.utils.folder_manager import create_folders_for_users
 from src.utils.status_tracker import status_tracker
-from src.TikTokLiveRecorder.src.core.tiktok_api import TikTokAPI
-from src.TikTokLiveRecorder.src.core.tiktok_recorder import TikTokLiveRecorder
+from TikTokLiveRecorder.src.core.tiktok_api import TikTokAPI
+from TikTokLiveRecorder.src.core.tiktok_recorder import TikTokLiveRecorder
 from googleapiclient.http import MediaFileUpload
 import os
 import threading
@@ -47,18 +47,18 @@ def record_user_livestream(username):
     try:
         while True:
             if api.is_live():
-                # User is live
-                status_tracker.update(username,
-                                      last_online=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                      online=True,
-                                      recording_duration=0)
-                # Create folder path
+                status_tracker.update(
+                    username,
+                    last_online=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    online=True,
+                    recording_duration=0
+                )
+
                 user_folder_id = folder_ids.get(username)
                 if not user_folder_id:
                     time.sleep(10)
                     continue
 
-                # Start recording
                 filename = f"{username}_{int(time.time())}.mp4"
                 local_path = os.path.join("recordings", username, date_folder)
                 os.makedirs(local_path, exist_ok=True)
@@ -67,7 +67,6 @@ def record_user_livestream(username):
                 status_tracker.update(username, online=True, recording_duration=0)
                 recorder.start_recording(output_path=full_path)
 
-                # Monitor recording duration
                 start_time = time.time()
                 while api.is_live():
                     elapsed = int(time.time() - start_time)
@@ -79,37 +78,32 @@ def record_user_livestream(username):
 
                 # Upload to Google Drive
                 if DRIVE_SERVICE:
-                    create_drive_subfolder_and_upload(DRIVE_SERVICE, username, date_folder, full_path)
+                    upload_to_drive(username, date_folder, full_path)
             else:
                 status_tracker.update(username, online=False)
                 time.sleep(30)
     except Exception as e:
         print(f"Error recording {username}: {e}")
 
-def create_drive_subfolder_and_upload(service, username, date_folder, file_path):
-    # Ensure user folder exists
+def upload_to_drive(username, date_folder, file_path):
     user_folder_id = folder_ids.get(username)
     if not user_folder_id:
         return
 
-    # Check if date folder exists
-    subfolders = service.files().list(
-        q=f"'{user_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and name='{date_folder}'",
-        spaces='drive',
-        fields='files(id, name)'
-    ).execute()
-
+    # Check/create date folder
+    query = f"'{user_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and name='{date_folder}'"
+    subfolders = DRIVE_SERVICE.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
     if subfolders['files']:
         date_folder_id = subfolders['files'][0]['id']
     else:
         folder_metadata = {'name': date_folder, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [user_folder_id]}
-        folder = service.files().create(body=folder_metadata, fields='id').execute()
+        folder = DRIVE_SERVICE.files().create(body=folder_metadata, fields='id').execute()
         date_folder_id = folder['id']
 
-    # Upload the recording
+    # Upload file
     file_metadata = {'name': os.path.basename(file_path), 'parents': [date_folder_id]}
     media = MediaFileUpload(file_path, mimetype='video/mp4')
-    service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    DRIVE_SERVICE.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
 @app.route("/")
 def index():
@@ -131,9 +125,8 @@ def oauth2callback():
     creds = flow.credentials
     save_credentials(creds)
     init_drive_service()
-    # Start recording threads after auth
-    usernames = read_usernames()
-    for user in usernames:
+    # Start livestream threads after auth
+    for user in read_usernames():
         threading.Thread(target=record_user_livestream, args=(user,), daemon=True).start()
     return redirect(url_for("status"))
 
