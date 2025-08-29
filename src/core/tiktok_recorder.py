@@ -1,82 +1,54 @@
-import os
+# TikTokLiveRecorder/src/core/tiktok_recorder.py
+import subprocess
 import threading
 import time
-from datetime import datetime
-from src.utils.google_drive_uploader import upload_file
-from src.core.tiktok_api import TikTokAPI
 
-class TikTokRecorder:
-    def __init__(self, username, drive_service=None):
-        self.username = username
-        self.drive_service = drive_service
-        self._recording = False
-        self.last_seen = None
-        self._stop_event = threading.Event()
-        self.thread = threading.Thread(target=self._monitor, daemon=True)
-        self.api = TikTokAPI(username)
+class TikTokLiveRecorder:
+    def __init__(self, api, resolution="480p"):
+        self.api = api
+        self.resolution = resolution
+        self.recording = False
+        self._process = None
 
-        self.recording_start_time = None
-        self.current_file = None
+    def start_recording(self, output_path):
+        """Start recording livestream in a separate thread"""
+        if not self.api.is_live():
+            print(f"{self.api.username} is not live.")
+            return
+        live_url = self.api.get_live_url()
+        if not live_url:
+            print(f"No live URL for {self.api.username}")
+            return
 
-    def start(self):
-        self.thread.start()
+        self.recording = True
+        threading.Thread(target=self._record, args=(live_url, output_path), daemon=True).start()
 
-    def stop(self):
-        self._stop_event.set()
-        if self._recording:
-            self._stop_recording()
+    def _record(self, live_url, output_path):
+        """Use ffmpeg to record livestream at 480p"""
+        try:
+            command = [
+                "ffmpeg",
+                "-y",
+                "-i", live_url,
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-tune", "zerolatency",
+                "-vf", "scale=-2:480",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-f", "mp4",
+                output_path
+            ]
+            self._process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._process.wait()
+        except Exception as e:
+            print(f"Error recording {self.api.username}: {e}")
+        finally:
+            self.recording = False
 
-    def is_live(self):
-        return self.api.is_live()
-
-    def is_recording(self):
-        return self._recording
-
-    def current_duration(self):
-        if self._recording and self.recording_start_time:
-            return int(time.time() - self.recording_start_time)
-        return 0
-
-    def _monitor(self):
-        while not self._stop_event.is_set():
-            live = self.is_live()
-            if live and not self._recording:
-                self._start_recording()
-            elif not live and self._recording:
-                self._stop_recording()
-            if live:
-                self.last_seen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            time.sleep(30)
-
-    def _start_recording(self):
-        date_folder = datetime.now().strftime("%m-%d-%Y")
-        save_dir = os.path.join("recordings", self.username, date_folder)
-        os.makedirs(save_dir, exist_ok=True)
-        count = 1
-        filename = f"{self.username}-{count}.mp4"
-        filepath = os.path.join(save_dir, filename)
-        while os.path.exists(filepath):
-            count += 1
-            filename = f"{self.username}-{count}.mp4"
-            filepath = os.path.join(save_dir, filename)
-        self.current_file = filepath
-
-        self._recording = True
-        self.recording_start_time = time.time()
-        threading.Thread(target=self._record_livestream, daemon=True).start()
-
-    def _record_livestream(self):
-        url = self.api.get_livestream_url()
-        cmd = f"ffmpeg -y -i \"{url}\" -c copy -t 00:30:00 \"{self.current_file}\""
-        os.system(cmd)  # Simple blocking call for recording
-        if self.drive_service:
-            upload_file(self.drive_service, self.current_file, self.username)
-        self._recording = False
-        self.recording_start_time = None
-        self.current_file = None
-
-    def _stop_recording(self):
-        # ffmpeg will naturally stop after 30 mins, or you can add kill logic
-        self._recording = False
-        self.recording_start_time = None
-        self.current_file = None
+    def stop_recording(self):
+        """Stop recording livestream"""
+        if self._process:
+            self._process.terminate()
+            self._process = None
+        self.recording = False
