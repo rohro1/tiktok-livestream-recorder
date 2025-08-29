@@ -1,47 +1,66 @@
-# TikTokLiveRecorder/src/core/tiktok_api.py
+# tiktok_api.py
 import requests
 import json
+import time
 
 class TikTokAPI:
+    """
+    Minimal TikTok livestream API wrapper
+    """
     def __init__(self, username):
         self.username = username
-        self.user_id = self.get_user_id(username)
-        self.live_url = None
+        self.live_id = None
+        self.is_live_status = False
 
-    def get_user_id(self, username):
-        """Get TikTok user ID from username"""
+    def update_live_status(self):
+        """
+        Fetch current live status from TikTok's unofficial API
+        """
         try:
-            url = f"https://www.tiktok.com/@{username}"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code != 200:
-                return None
-            text = r.text
-            start = text.find('{"id":"')
-            if start == -1:
-                return None
-            start += len('{"id":"')
-            end = text.find('"', start)
-            return text[start:end]
+            url = f"https://www.tiktok.com/@{self.username}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                              "(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+            }
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                self.is_live_status = False
+                return
+
+            html = resp.text
+            # Search for livestream info
+            if '"is_live":true' in html:
+                self.is_live_status = True
+            else:
+                self.is_live_status = False
         except Exception as e:
-            print(f"Error getting user ID for {username}: {e}")
-            return None
+            print(f"[TikTokAPI] Error checking live status for {self.username}: {e}")
+            self.is_live_status = False
 
     def is_live(self):
-        """Check if the user is live and get the live URL"""
-        if not self.user_id:
-            return False
-        try:
-            url = f"https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/live/room?user_id={self.user_id}"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get(url, headers=headers, timeout=10)
-            data = r.json()
-            if data.get("data") and data["data"].get("status") == 2:
-                self.live_url = data["data"]["stream_url"]["hls_pull_url"]
-                return True
-            return False
-        except Exception as e:
-            return False
+        self.update_live_status()
+        return self.is_live_status
 
-    def get_live_url(self):
-        return self.live_url
+    def get_stream_url(self):
+        """
+        Get actual livestream URL for ffmpeg recording
+        """
+        if not self.is_live():
+            return None
+        # Use TikTok's unofficial API / livestream endpoint
+        try:
+            api_url = f"https://m.tiktok.com/api/live/detail/?username={self.username}"
+            headers = {
+                "User-Agent": "Mozilla/5.0"
+            }
+            resp = requests.get(api_url, headers=headers, timeout=10)
+            data = resp.json()
+            stream_url = data.get("data", {}).get("stream_url", None)
+            if stream_url:
+                return stream_url
+            else:
+                # fallback dummy, or raise
+                return None
+        except Exception as e:
+            print(f"[TikTokAPI] Error fetching stream URL for {self.username}: {e}")
+            return None
