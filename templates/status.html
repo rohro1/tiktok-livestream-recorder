@@ -1,25 +1,36 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>TikTok Livestream Status</title>
+    <title>Livestream Status</title>
+    <style>
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #f2f2f2; }
+        .recording { color: green; font-weight: bold; }
+        .not-recording { color: red; font-weight: bold; }
+    </style>
 </head>
 <body>
     <h1>Livestream Status</h1>
-    <table border="1" cellpadding="5">
+    <table>
         <tr>
             <th>Username</th>
             <th>Last Online</th>
-            <th>Live Duration</th>
+            <th>Live Duration (s)</th>
             <th>Online</th>
-            <th>Recording Duration</th>
+            <th>Recording Duration (s)</th>
+            <th>Recording Status</th>
         </tr>
         {% for username, data in statuses.items() %}
         <tr>
             <td>{{ username }}</td>
             <td>{{ data.last_online }}</td>
             <td>{{ data.live_duration }}</td>
-            <td>{{ data.online }}</td>
+            <td>{{ "Yes" if data.online else "No" }}</td>
             <td>{{ data.recording_duration }}</td>
+            <td class="{{ 'recording' if data.recording_status=='Recording' else 'not-recording' }}">
+                {{ data.recording_status }}
+            </td>
         </tr>
         {% endfor %}
     </table>

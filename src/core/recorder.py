@@ -1,48 +1,68 @@
-import os
-import subprocess
-import datetime
+# src/recorder.py
+import time
+from TikTokLive import TikTokLiveClient
+from TikTokLive.types.events import LiveStart, LiveEnd
+from datetime import datetime
 from src.utils.status_tracker import status_tracker
 
-class Recorder:
-    def __init__(self, username, drive_service):
+class TikTokRecorder:
+    def __init__(self, username, tracker):
         self.username = username
-        self.drive_service = drive_service
-        self.recording_process = None
+        self.tracker = tracker
+        self.is_live = False
+        self.recording_start = None
 
-    def start_recording(self, stream_url):
-        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-        folder = f"recordings/{self.username}/{date_str}"
-        os.makedirs(folder, exist_ok=True)
-
-        index = 1
+    def run(self):
         while True:
-            filename = f"{folder}/{self.username}-{date_str}-{index}.mp4"
-            if not os.path.exists(filename):
-                break
-            index += 1
+            try:
+                client = TikTokLiveClient(unique_id=self.username)
 
-        command = [
-            "ffmpeg", "-y", "-i", stream_url,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "128k",
-            filename
-        ]
-        self.recording_process = subprocess.Popen(command)
-        status_tracker.update(self.username, online=True, recording="YES")
+                @client.on("live_start")
+                async def on_live_start(event: LiveStart):
+                    print(f"{self.username} is live!")
+                    self.is_live = True
+                    self.recording_start = datetime.now()
+                    self.tracker.update(
+                        self.username,
+                        last_online=self.recording_start.strftime("%Y-%m-%d %H:%M:%S"),
+                        online=True,
+                        live_duration=0,
+                        recording_duration=0
+                    )
 
-    def stop_recording(self):
-        if self.recording_process:
-            self.recording_process.terminate()
-            self.recording_process = None
-        status_tracker.update(self.username, online=False, recording="NO")
+                @client.on("live_end")
+                async def on_live_end(event: LiveEnd):
+                    print(f"{self.username} ended the livestream.")
+                    self.is_live = False
+                    end_time = datetime.now()
+                    duration = int((end_time - self.recording_start).total_seconds())
+                    self.tracker.update(
+                        self.username,
+                        last_online=end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        online=False,
+                        live_duration=duration,
+                        recording_duration=duration
+                    )
 
-    def update_status(self, is_live):
-        if is_live:
-            if not self.recording_process:
-                # Replace with actual TikTok stream URL retrieval
-                stream_url = f"https://fake-tiktok-stream/{self.username}.m3u8"
-                self.start_recording(stream_url)
-        else:
-            if self.recording_process:
-                self.stop_recording()
-            status_tracker.update(self.username, online=False, recording="NO")
+                # periodically update live/recording duration
+                async def update_status():
+                    while True:
+                        if self.is_live and self.recording_start:
+                            duration = int((datetime.now() - self.recording_start).total_seconds())
+                            self.tracker.update(
+                                self.username,
+                                online=True,
+                                live_duration=duration,
+                                recording_duration=duration,
+                                last_online=self.recording_start.strftime("%Y-%m-%d %H:%M:%S")
+                            )
+                        await asyncio.sleep(5)
+
+                import asyncio
+                loop = asyncio.get_event_loop()
+                loop.create_task(update_status())
+                client.run()
+
+            except Exception as e:
+                print(f"Error recording {self.username}: {e}")
+                time.sleep(60)  # retry in 1 min

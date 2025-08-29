@@ -29,5 +29,5 @@ class StatusTracker:
         return self._statuses.get(username, default)
 
 
-# instantiate a single global tracker
+# global tracker
 status_tracker = StatusTracker()
