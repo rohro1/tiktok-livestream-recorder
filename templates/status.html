@@ -1,18 +1,27 @@
-<table>
-  <tr>
-    <th>Username</th>
-    <th>Online</th>
-    <th>Recording Duration</th>
-    <th>Last Online</th>
-    <th>Live Duration</th>
-  </tr>
-  {% for user, data in status.items() %}
-  <tr>
-    <td>{{ user }}</td>
-    <td>{{ data.online }}</td>
-    <td>{{ data.recording_duration }}</td>
-    <td>{{ data.last_online }}</td>
-    <td>{{ data.live_duration }}</td>
-  </tr>
-  {% endfor %}
-</table>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TikTok Livestream Status</title>
+</head>
+<body>
+    <h1>Livestream Status</h1>
+    <table border="1" cellpadding="5">
+        <tr>
+            <th>Username</th>
+            <th>Last Online</th>
+            <th>Live Duration</th>
+            <th>Online</th>
+            <th>Recording Duration</th>
+        </tr>
+        {% for username, data in statuses.items() %}
+        <tr>
+            <td>{{ username }}</td>
+            <td>{{ data.last_online }}</td>
+            <td>{{ data.live_duration }}</td>
+            <td>{{ data.online }}</td>
+            <td>{{ data.recording_duration }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>

@@ -1,29 +1,24 @@
 # main.py
 from flask import Flask, redirect, url_for, request, render_template
-from src.utils.oauth_drive import get_flow, save_credentials, load_credentials, get_drive_service
+from src.utils.oauth_drive import get_flow, save_credentials, load_credentials
 from src.utils.folder_manager import create_folders_for_users
-from src.utils.status_tracker import status_tracker  # Assuming you fixed this import
+from src.utils.status_tracker import status_tracker
 import os
 import threading
 import time
-from datetime import datetime
 
 app = Flask(__name__)
 
-# Path to your usernames.txt
 USERNAMES_FILE = "usernames.txt"
-
-# Global dict to store folder IDs per user
 folder_ids = {}
 
 def read_usernames():
     if not os.path.exists(USERNAMES_FILE):
         return []
     with open(USERNAMES_FILE, "r") as f:
-        return [line.strip() for line in f.readlines() if line.strip()]
+        return [line.strip() for line in f if line.strip()]
 
 def update_folders():
-    """Periodically create/update folders for each username on Google Drive."""
     global folder_ids
     while True:
         usernames = read_usernames()
@@ -31,7 +26,7 @@ def update_folders():
             folder_ids = create_folders_for_users(usernames)
         except Exception as e:
             print("Error updating folders:", e)
-        time.sleep(300)  # every 5 minutes
+        time.sleep(300)  # every 5 min
 
 @app.route("/")
 def index():
@@ -56,7 +51,6 @@ def oauth2callback():
 
 @app.route("/status")
 def status():
-    """Display livestream status for all usernames."""
     usernames = read_usernames()
     statuses = {}
     for username in usernames:
@@ -70,7 +64,5 @@ def status():
     return render_template("status.html", statuses=statuses)
 
 if __name__ == "__main__":
-    # Start folder updater thread
     threading.Thread(target=update_folders, daemon=True).start()
-    # Start Flask app
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
