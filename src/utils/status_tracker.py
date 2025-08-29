@@ -28,6 +28,4 @@ class StatusTracker:
     def get(self, username, default=None):
         return self._statuses.get(username, default)
 
-
-# global tracker
 status_tracker = StatusTracker()

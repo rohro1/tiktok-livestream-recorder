@@ -1,38 +1,35 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Livestream Status</title>
-    <style>
-        table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-        th { background-color: #f2f2f2; }
-        .recording { color: green; font-weight: bold; }
-        .not-recording { color: red; font-weight: bold; }
-    </style>
+<meta charset="UTF-8">
+<title>Livestream Status</title>
+<style>
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid black; padding: 8px; text-align: center; }
+th { background-color: #f2f2f2; }
+</style>
 </head>
 <body>
-    <h1>Livestream Status</h1>
-    <table>
-        <tr>
-            <th>Username</th>
-            <th>Last Online</th>
-            <th>Live Duration (s)</th>
-            <th>Online</th>
-            <th>Recording Duration (s)</th>
-            <th>Recording Status</th>
-        </tr>
-        {% for username, data in statuses.items() %}
-        <tr>
-            <td>{{ username }}</td>
-            <td>{{ data.last_online }}</td>
-            <td>{{ data.live_duration }}</td>
-            <td>{{ "Yes" if data.online else "No" }}</td>
-            <td>{{ data.recording_duration }}</td>
-            <td class="{{ 'recording' if data.recording_status=='Recording' else 'not-recording' }}">
-                {{ data.recording_status }}
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
+<h1>Livestream Status</h1>
+<table>
+<tr>
+    <th>Username</th>
+    <th>Last Online</th>
+    <th>Live Duration (s)</th>
+    <th>Online</th>
+    <th>Recording Duration (s)</th>
+    <th>Recording Status</th>
+</tr>
+{% for username, info in statuses.items() %}
+<tr>
+    <td>{{ username }}</td>
+    <td>{{ info.last_online }}</td>
+    <td>{{ info.live_duration }}</td>
+    <td>{{ "Online" if info.online else "Offline" }}</td>
+    <td>{{ info.recording_duration }}</td>
+    <td>{{ info.recording_status }}</td>
+</tr>
+{% endfor %}
+</table>
 </body>
 </html>
