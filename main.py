@@ -3,8 +3,9 @@ from flask import Flask, redirect, url_for, request, render_template
 from src.utils.oauth_drive import get_flow, save_credentials, load_credentials, get_drive_service
 from src.utils.folder_manager import create_folders_for_users
 from src.utils.status_tracker import status_tracker
-from TikTokLiveRecorder.src.core.tiktok_api import TikTokAPI
-from TikTokLiveRecorder.src.core.tiktok_recorder import TikTokLiveRecorder
+from src.TikTokLiveRecorder.src.core.tiktok_api import TikTokAPI
+from src.TikTokLiveRecorder.src.core.tiktok_recorder import TikTokLiveRecorder
+from googleapiclient.http import MediaFileUpload
 import os
 import threading
 import time
@@ -92,8 +93,12 @@ def create_drive_subfolder_and_upload(service, username, date_folder, file_path)
         return
 
     # Check if date folder exists
-    subfolders = service.files().list(q=f"'{user_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and name='{date_folder}'",
-                                      spaces='drive', fields='files(id, name)').execute()
+    subfolders = service.files().list(
+        q=f"'{user_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and name='{date_folder}'",
+        spaces='drive',
+        fields='files(id, name)'
+    ).execute()
+
     if subfolders['files']:
         date_folder_id = subfolders['files'][0]['id']
     else:
@@ -150,7 +155,6 @@ def status():
 if __name__ == "__main__":
     init_drive_service()
     threading.Thread(target=update_folders, daemon=True).start()
-    # Start livestream threads for all users if creds exist
     if DRIVE_SERVICE:
         for user in read_usernames():
             threading.Thread(target=record_user_livestream, args=(user,), daemon=True).start()
