@@ -25,6 +25,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 USERNAMES_FILE = os.environ.get("USERNAMES_FILE", "usernames.txt")
 RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "recordings")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "12"))
+MAX_RETRIES = 3  # Maximum retries on failed requests
 
 app = Flask(__name__, template_folder="templates")
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
@@ -55,6 +56,21 @@ def recording_output_path(username):
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     return os.path.join(RECORDINGS_DIR, username, f"{username}_{ts}.mp4")
 
+# Function to retry fetching live status for a user
+def fetch_live_status_with_retries(username, retries=MAX_RETRIES):
+    for attempt in range(retries):
+        try:
+            api = TikTokAPI(username)
+            is_live = api.is_live()
+            return is_live
+        except TimeoutError:
+            logger.warning(f"Timeout while checking live status for {username}. Retrying ({attempt + 1}/{retries})...")
+        except Exception as e:
+            logger.error(f"Error checking live status for {username}: {e}")
+            return False  # Return False in case of any error
+        sleep(2)  # Wait before retrying
+    return False  # After retries, return False if still unsuccessful
+
 # Poll loop to continuously check for live status and manage recordings
 def poll_loop():
     logger.info("Starting poll loop (interval=%s)", POLL_INTERVAL)
@@ -68,16 +84,9 @@ def poll_loop():
     while True:
         for username in usernames:
             try:
-                # Initialize TikTokAPI for the username
-                api = TikTokAPI(username)
-                is_live = False
-                try:
-                    is_live = api.is_live()
-                except TimeoutError:
-                    logger.warning(f"Timeout while checking live status for {username}. Retrying...")
-                except Exception as e:
-                    logger.error(f"Error checking live status for {username}: {e}")
-
+                # Fetch live status with retries
+                is_live = fetch_live_status_with_retries(username)
+                
                 # Handle live status change
                 if is_live:
                     # Set user to online only if they were previously offline
