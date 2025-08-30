@@ -1,62 +1,46 @@
 # src/core/tiktok_api.py
+import subprocess
+import json
 import logging
-import requests
 
-logger = logging.getLogger("tiktok_api")
+logger = logging.getLogger("TikTokAPI")
 logger.setLevel(logging.INFO)
 
 class TikTokAPI:
     """
-    Handles checking if a TikTok username is live and getting the stream URL.
+    Minimal wrapper to check if a TikTok user is live using yt-dlp.
     """
-
     def __init__(self, username):
         self.username = username
-        self.user_id = None
-        self.live_url = None
-
-    def get_user_info(self):
-        """
-        Fetch user info from TikTok API to get user_id
-        """
-        try:
-            resp = requests.get(f"https://www.tiktok.com/@{self.username}", timeout=10)
-            if resp.status_code == 200:
-                # TikTok returns HTML; parse userId from initial state
-                import re, json
-                match = re.search(r'window\.__INIT_PROPS__\s*=\s*({.*?});', resp.text)
-                if match:
-                    data = json.loads(match.group(1))
-                    self.user_id = data.get("userData", {}).get("user", {}).get("id")
-            return self.user_id
-        except Exception:
-            logger.debug(f"Failed to fetch user info for {self.username}", exc_info=True)
-            return None
+        self.stream_url = None
 
     def is_live(self):
         """
-        Returns True if user is live, False otherwise
+        Returns True if the user is currently live.
         """
         try:
-            from yt_dlp.utils import DownloadError
-            import yt_dlp
-            url = f"https://www.tiktok.com/@{self.username}"
-            ydl_opts = {"quiet": True, "skip_download": True}
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                live_status = info.get("is_live") or False
-                if live_status:
-                    self.live_url = info.get("url")
-                    return True
-                else:
-                    self.live_url = None
-                    return False
+            # yt-dlp command to get live info
+            cmd = [
+                "yt-dlp",
+                f"https://www.tiktok.com/@{self.username}",
+                "--dump-json",
+                "--skip-download"
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if proc.returncode != 0:
+                logger.warning("yt-dlp failed for %s: %s", self.username, proc.stderr)
+                return False
+            data = json.loads(proc.stdout)
+            is_live = data.get("is_live", False)
+            if is_live:
+                self.stream_url = data.get("url")
+            else:
+                self.stream_url = None
+            return is_live
         except Exception:
-            self.live_url = None
+            logger.exception("Failed to check live status for %s", self.username)
+            self.stream_url = None
             return False
 
-    def get_live_url(self):
-        """
-        Returns live stream URL or None
-        """
-        return self.live_url
+    def get_stream_url(self):
+        return self.stream_url
