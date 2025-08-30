@@ -17,7 +17,14 @@
 </head>
 <body>
   <h1>Livestream Status</h1>
-  <p>Google Drive status: {% if (token_exists := (True if (os_path := true) else False)) %}{% endif %}</p>
+<p>Google Drive status: 
+    {% set token_exists = true if os_path == true else false %}
+    {% if token_exists %}
+        Available
+    {% else %}
+        Not Available
+    {% endif %}
+</p>
   <table>
     <thead>
       <tr>
