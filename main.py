@@ -96,8 +96,9 @@ def poll_loop():
                 logger.exception("Error while polling %s", username)
         sleep(POLL_INTERVAL)
 
-poll_thread = Thread(target=poll_loop, daemon=True)
-poll_thread.start()
+if __name__ == "__main__" or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    poll_thread = Thread(target=poll_loop, daemon=True)
+    poll_thread.start()
 
 @app.route("/")
 def index():
