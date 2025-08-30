@@ -4,49 +4,44 @@ from datetime import datetime
 
 class StatusTracker:
     def __init__(self):
-        self._lock = threading.RLock()
-        # internal map username -> dict
-        self._map = {}
+        self._lock = threading.Lock()
+        self._data = {}
 
-    def _ensure(self, username):
+    def update_status(self, username, online=None, recording=None):
         with self._lock:
-            if username not in self._map:
-                self._map[username] = {
-                    "online": False,
-                    "last_online": None,
+            if username not in self._data:
+                self._data[username] = {
+                    "last_online": "N/A",
                     "live_duration": 0,
+                    "online": False,
+                    "recording_duration": 0,
                     "recording": False,
                     "recording_file": None,
                 }
-            return self._map[username]
+            entry = self._data[username]
 
-    def get_status(self, username):
-        with self._lock:
-            self._ensure(username)
-            # return a shallow copy
-            return dict(self._map[username])
-
-    def update_status(self, username, online=None, live_duration=None, recording=None):
-        with self._lock:
-            st = self._ensure(username)
-            now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             if online is not None:
+                entry["online"] = online
                 if online:
-                    st["online"] = True
-                    st["last_online"] = now
-                else:
-                    st["online"] = False
-            if live_duration is not None:
-                st["live_duration"] = live_duration
-            if recording is not None:
-                st["recording"] = recording
+                    entry["last_online"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-    def set_recording_file(self, username, path):
+            if recording is not None:
+                entry["recording"] = recording
+
+    def set_recording_file(self, username, filepath):
         with self._lock:
-            st = self._ensure(username)
-            st["recording_file"] = path
+            if username in self._data:
+                self._data[username]["recording_file"] = filepath
 
     def get_recording_file(self, username):
         with self._lock:
-            st = self._ensure(username)
-            return st.get("recording_file")
+            return self._data.get(username, {}).get("recording_file")
+
+    def get_status(self, username):
+        with self._lock:
+            return self._data.get(username, {})
+
+    # ✅ This is the method your main.py expects
+    def get_all(self):
+        with self._lock:
+            return dict(self._data)
