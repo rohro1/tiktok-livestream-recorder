@@ -70,7 +70,8 @@ def poll_loop():
                 # User is live, handle accordingly
                 if is_live:
                     # Set the user to online only if they were previously offline
-                    status_tracker.update_status(username, online=True)
+                    if not status_tracker.get_status(username).get("online", False):
+                        status_tracker.update_status(username, online=True)
 
                     if username not in recorders or not recorders[username].is_running():
                         # Start recording if not already running
@@ -81,6 +82,7 @@ def poll_loop():
                             recorders[username] = recorder
                             status_tracker.set_recording_file(username, out_path)
                             status_tracker.update_status(username, recording=True)
+                            logger.info("Started recording for %s", username)
                         else:
                             status_tracker.update_status(username, recording=False)
 
@@ -136,14 +138,13 @@ def status():
     rows = []
     for username in usernames:
         info = status_tracker.get_status(username)
-        # Ensure that live_duration is updated correctly before displaying
         last_online = info.get("last_online", "N/A")
         live_duration = info.get("live_duration", 0)
         online = info.get("online", False)
         recording = info.get("recording", False)
         recording_file = info.get("recording_file")
         
-        # Show more explicit details for recording
+        # Update status with clearer information for recording
         recording_status = "Recording" if recording else "Not Recording"
         recording_file_status = f'<a href="/{recording_file}" target="_blank">{recording_file}</a>' if recording_file else "-"
 
