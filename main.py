@@ -140,22 +140,22 @@ def oauth2callback():
 
 @app.route("/status")
 def status():
-    # ✅ FIXED: use `status_tracker` not `STATUS_TRACKER`
-    data = []
-    for username, info in status_tracker.items():
-        data.append({
+    if not session.get("authorized"):
+        return redirect(url_for("authorize"))
+
+    # FIX: use status_tracker.data instead of status_tracker directly
+    table_data = []
+    for username, info in status_tracker.data.items():
+        table_data.append({
             "username": username,
             "last_online": info.get("last_online", "N/A"),
             "live_duration": info.get("live_duration", 0),
             "online": info.get("online", False),
             "recording_duration": info.get("recording_duration", 0),
-            "recording": info.get("recording", False),
+            "recording_status": "Recording" if info.get("online", False) else "Not Recording"
         })
 
-    # ✅ Pass Google Drive connection status
-    drive_connected = os.path.exists("token.json")
-
-    return render_template("status.html", rows=data, drive_connected=drive_connected)
+    return render_template("status.html", streams=table_data)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
