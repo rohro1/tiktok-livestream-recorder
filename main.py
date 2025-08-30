@@ -1,7 +1,5 @@
 import os
 import logging
-import subprocess
-import json
 from flask import Flask, redirect, render_template, request, url_for, jsonify
 from threading import Thread
 from time import sleep
@@ -10,6 +8,7 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tiktok-recorder")
 
+# Local imports
 from src.utils.oauth_drive import create_auth_url, fetch_and_store_credentials, get_drive_service, TOKEN_PATH
 from src.utils.status_tracker import StatusTracker
 from src.core.tiktok_api import TikTokAPI
@@ -17,6 +16,7 @@ from src.core.tiktok_recorder import TikTokLiveRecorder
 from src.utils.folder_manager import make_user_folders
 from src.utils.google_drive_uploader import GoogleDriveUploader
 
+# Config
 PORT = int(os.environ.get("PORT", 10000))
 OAUTH_CREDENTIALS_FILE = os.environ.get("OAUTH_CREDENTIALS_FILE", "credentials.json")
 OAUTH_REDIRECT = os.environ.get("OAUTH_REDIRECT", None)
@@ -27,7 +27,6 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "12"))
 
 app = Flask(__name__, template_folder="templates")
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
-
 
 def read_usernames(path):
     out = []
@@ -41,37 +40,22 @@ def read_usernames(path):
         logger.warning("Usernames file not found: %s", path)
     return out
 
-
 usernames = read_usernames(USERNAMES_FILE)
 status_tracker = StatusTracker()
 recorders = {}
 uploaders = {}
-
+drive_service = None
 
 def recording_output_path(username):
     os.makedirs(os.path.join(RECORDINGS_DIR, username), exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     return os.path.join(RECORDINGS_DIR, username, f"{username}_{ts}.mp4")
 
-
-def check_username_exists(username: str) -> bool:
-    """Check if a TikTok username exists via yt-dlp JSON metadata fetch"""
-    try:
-        cmd = ["yt-dlp", f"https://www.tiktok.com/@{username}", "-J"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        if result.returncode != 0:
-            return False
-        data = json.loads(result.stdout)
-        return "uploader_id" in data or "channel_url" in data
-    except Exception as e:
-        logger.warning("Failed to validate username %s: %s", username, e)
-        return False
-
-
 def poll_loop():
+    global drive_service
     logger.info("Starting poll loop (interval=%s)", POLL_INTERVAL)
     make_user_folders(usernames, RECORDINGS_DIR)
-    drive_service = get_drive_service(OAUTH_CREDENTIALS_FILE, SCOPES)
+
     if drive_service:
         for u in usernames:
             uploaders[u] = GoogleDriveUploader(drive_service, drive_folder_root="TikTokRecordings")
@@ -79,22 +63,10 @@ def poll_loop():
     while True:
         for username in usernames:
             try:
-                # Verify account exists
-                exists = check_username_exists(username)
-                if not exists:
-                    status_tracker.update_status(username, online=False)
-                    status_tracker.set_recording_file(username, None)
-                    status_tracker.extra_info = {"valid": False}
-                    logger.warning("Username %s does not exist on TikTok", username)
-                    continue
-
-                # Check if live
                 api = TikTokAPI(username)
-                is_live = api.is_live()
-
+                is_live = api.is_live()  # no profile validation, just check live
                 if is_live:
                     status_tracker.update_status(username, online=True)
-                    status_tracker.extra_info = {"valid": True}
                     if username not in recorders or not recorders[username].is_running():
                         recorder = TikTokLiveRecorder(api, resolution="480p")
                         out_path = recording_output_path(username)
@@ -117,19 +89,13 @@ def poll_loop():
                                 logger.exception("Upload failed for %s: %s", username, e)
                         status_tracker.set_recording_file(username, None)
                         status_tracker.update_status(username, recording=False)
-
             except Exception as e:
                 logger.exception("Error polling %s: %s", username, e)
         sleep(POLL_INTERVAL)
 
-
-Thread(target=poll_loop, daemon=True).start()
-
-
 @app.route("/")
 def index():
     return redirect(url_for("status"))
-
 
 @app.route("/authorize")
 def authorize():
@@ -137,18 +103,20 @@ def authorize():
     auth_url = create_auth_url(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri)
     return render_template("authorize.html", auth_url=auth_url)
 
-
 @app.route("/oauth2callback")
 def oauth2callback():
+    global drive_service
     redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
     full_url = request.url
     creds = fetch_and_store_credentials(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri, full_url)
     if creds:
         logger.info("OAuth success — credentials saved to %s", TOKEN_PATH)
+        drive_service = get_drive_service(OAUTH_CREDENTIALS_FILE, SCOPES)
+        # start poll loop only after creds available
+        Thread(target=poll_loop, daemon=True).start()
     else:
         logger.warning("OAuth callback did not produce credentials")
     return redirect(url_for("status"))
-
 
 @app.route("/status")
 def status():
@@ -157,7 +125,6 @@ def status():
         st = status_tracker.get_status(username)
         data.append({
             "username": username,
-            "valid": getattr(status_tracker, "extra_info", {}).get("valid", True),
             "last_online": st.get("last_online") or "N/A",
             "live_duration": st.get("live_duration", 0),
             "online": st.get("online", False),
@@ -167,7 +134,6 @@ def status():
     if request.args.get("json") == "1":
         return jsonify({item["username"]: item for item in data})
     return render_template("status.html", rows=data)
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
