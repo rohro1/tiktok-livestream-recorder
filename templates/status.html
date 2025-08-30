@@ -1,52 +1,60 @@
 <!-- templates/status.html -->
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>TikTok Livestream Recorder Status</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body { font-family: Arial, sans-serif; padding: 24px; }
-    table { border-collapse: collapse; width: 100%; max-width: 1000px; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-    th { background: #f4f4f4; }
-    .online { color: green; font-weight: bold; }
-    .offline { color: #777; }
-    .recording { color: red; font-weight: bold; }
-  </style>
+    <meta charset="UTF-8">
+    <title>Livestream Status</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+        th { background: #f2f2f2; }
+        tr:nth-child(even) { background: #f9f9f9; }
+    </style>
 </head>
 <body>
-  <h1>Livestream Status</h1>
-  <p>Google Drive status: {% if (token_exists := (True if (os_path := true) else False)) %}{% endif %}</p>
-  <table>
-    <thead>
-      <tr>
-        <th>Username</th>
-        <th>Last Online (UTC)</th>
-        <th>Live Duration (s)</th>
-        <th>Online</th>
-        <th>Recording Status</th>
-        <th>Recording File</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td>{{ r.username }}</td>
-        <td>{{ r.last_online }}</td>
-        <td>{{ r.live_duration }}</td>
-        <td class="{{ 'online' if r.online else 'offline' }}">{{ 'Online' if r.online else 'Offline' }}</td>
-        <td class="{{ 'recording' if r.recording else '' }}">{{ 'Recording' if r.recording else 'Not Recording' }}</td>
-        <td>
-          {% if r.recording_file %}
-            <a href="/{{ r.recording_file }}" target="_blank">{{ r.recording_file }}</a>
-          {% else %}
-            -
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+    <h1>Livestream Status</h1>
+
+    <p>
+        Google Drive status: 
+        {% if drive_connected %}
+            ✅ Connected
+        {% else %}
+            ❌ Not Connected
+        {% endif %}
+    </p>
+
+    <table>
+        <tr>
+            <th>Username</th>
+            <th>Last Online</th>
+            <th>Live Duration</th>
+            <th>Online</th>
+            <th>Recording Status</th>
+            <th>Recording Duration</th>
+        </tr>
+        {% for row in rows %}
+        <tr>
+            <td>{{ row.username }}</td>
+            <td>{{ row.last_online }}</td>
+            <td>{{ row.live_duration }}</td>
+            <td>
+                {% if row.online %}
+                    🟢 Online
+                {% else %}
+                    🔴 Offline
+                {% endif %}
+            </td>
+            <td>
+                {% if row.online %}
+                    📹 Recording
+                {% else %}
+                    ⏹️ Not Recording
+                {% endif %}
+            </td>
+            <td>{{ row.recording_duration }}</td>
+        </tr>
+        {% endfor %}
+    </table>
 </body>
 </html>

@@ -140,23 +140,20 @@ def oauth2callback():
 
 @app.route("/status")
 def status():
-    # Prepare data for template
+    # existing logic that builds data list (rows)
     data = []
-    for username in usernames:
-        st = status_tracker.get_status(username)
+    for username, info in STATUS_TRACKER.items():
         data.append({
             "username": username,
-            "last_online": st.get("last_online") or "N/A",
-            "live_duration": st.get("live_duration", 0),
-            "online": st.get("online", False),
-            "recording": st.get("recording", False),
-            "recording_file": st.get("recording_file", None),
+            "last_online": info.get("last_online", "N/A"),
+            "live_duration": info.get("live_duration", 0),
+            "online": info.get("online", False),
+            "recording_duration": info.get("recording_duration", 0),
         })
-    # If request wants json, return raw
-    if request.args.get("json") == "1":
-        from flask import jsonify
-        return jsonify({item["username"]: item for item in data})
-    return render_template("status.html", rows=data)
 
+    # ✅ Pass Google Drive connection status
+    drive_connected = os.path.exists("token.json")
+
+    return render_template("status.html", rows=data, drive_connected=drive_connected)
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
