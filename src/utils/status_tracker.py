@@ -1,29 +1,52 @@
+# src/utils/status_tracker.py
+import threading
+from datetime import datetime
+
 class StatusTracker:
     def __init__(self):
-        self._statuses = {}
+        self._lock = threading.RLock()
+        # internal map username -> dict
+        self._map = {}
 
-    def update(self, username, last_online=None, live_duration=None, online=None, recording_duration=None):
-        if username not in self._statuses:
-            self._statuses[username] = {
-                "last_online": last_online or "N/A",
-                "live_duration": live_duration or 0,
-                "online": online or False,
-                "recording_duration": recording_duration or 0
-            }
-        else:
-            if last_online is not None:
-                self._statuses[username]["last_online"] = last_online
-            if live_duration is not None:
-                self._statuses[username]["live_duration"] = live_duration
+    def _ensure(self, username):
+        with self._lock:
+            if username not in self._map:
+                self._map[username] = {
+                    "online": False,
+                    "last_online": None,
+                    "live_duration": 0,
+                    "recording": False,
+                    "recording_file": None,
+                }
+            return self._map[username]
+
+    def get_status(self, username):
+        with self._lock:
+            self._ensure(username)
+            # return a shallow copy
+            return dict(self._map[username])
+
+    def update_status(self, username, online=None, live_duration=None, recording=None):
+        with self._lock:
+            st = self._ensure(username)
+            now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             if online is not None:
-                self._statuses[username]["online"] = online
-            if recording_duration is not None:
-                self._statuses[username]["recording_duration"] = recording_duration
+                if online:
+                    st["online"] = True
+                    st["last_online"] = now
+                else:
+                    st["online"] = False
+            if live_duration is not None:
+                st["live_duration"] = live_duration
+            if recording is not None:
+                st["recording"] = recording
 
-    def get_statuses(self):
-        return self._statuses
+    def set_recording_file(self, username, path):
+        with self._lock:
+            st = self._ensure(username)
+            st["recording_file"] = path
 
-    def get(self, username, default=None):
-        return self._statuses.get(username, default)
-
-status_tracker = StatusTracker()
+    def get_recording_file(self, username):
+        with self._lock:
+            st = self._ensure(username)
+            return st.get("recording_file")

@@ -1,11 +1,10 @@
-<!DOCTYPE html>
+<!-- templates/authorize.html -->
+<!doctype html>
 <html>
-<head>
-    <title>Authorize Google Drive</title>
-</head>
+<head><meta charset="utf-8"><title>Authorize Google Drive</title></head>
 <body>
-    <h2>Google Drive Authorization Required</h2>
-    <p>Click below to authorize access:</p>
-    <a href="{{ auth_url }}">Authorize Google Drive</a>
+  <h1>Authorize Google Drive Access</h1>
+  <p>Click the button to authenticate with Google Drive.</p>
+  <a href="{{ auth_url }}"><button>Authorize Google Drive</button></a>
 </body>
 </html>
