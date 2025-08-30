@@ -5,6 +5,7 @@ from datetime import datetime
 class StatusTracker:
     def __init__(self):
         self._lock = threading.RLock()
+        # internal map username -> dict
         self._map = {}
 
     def _ensure(self, username):
@@ -22,24 +23,30 @@ class StatusTracker:
     def get_status(self, username):
         with self._lock:
             self._ensure(username)
+            # return a shallow copy
             return dict(self._map[username])
 
     def update_status(self, username, online=None, live_duration=None, recording=None):
         with self._lock:
-            status = self._ensure(username)
+            st = self._ensure(username)
+            now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             if online is not None:
-                status["online"] = online
+                if online:
+                    st["online"] = True
+                    st["last_online"] = now
+                else:
+                    st["online"] = False
             if live_duration is not None:
-                status["live_duration"] = live_duration
+                st["live_duration"] = live_duration
             if recording is not None:
-                status["recording"] = recording
+                st["recording"] = recording
 
     def set_recording_file(self, username, path):
         with self._lock:
-            status = self._ensure(username)
-            status["recording_file"] = path
+            st = self._ensure(username)
+            st["recording_file"] = path
 
     def get_recording_file(self, username):
         with self._lock:
-            status = self._ensure(username)
-            return status.get("recording_file")
+            st = self._ensure(username)
+            return st.get("recording_file")

@@ -1,3 +1,4 @@
+<!-- templates/status.html -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -21,21 +22,27 @@
       <tr>
         <th>Username</th>
         <th>Last Online (UTC)</th>
-        <th>Live Duration (Seconds)</th>
+        <th>Live Duration (s)</th>
         <th>Online</th>
-        <th>Recording</th>
+        <th>Recording Status</th>
         <th>Recording File</th>
       </tr>
     </thead>
     <tbody>
-      {% for row in rows %}
+      {% for r in rows %}
       <tr>
-        <td>{{ row.username }}</td>
-        <td>{{ row.last_online }}</td>
-        <td>{{ row.live_duration }}</td>
-        <td class="{{ 'online' if row.online == 'Online' else 'offline' }}">{{ row.online }}</td>
-        <td class="{{ 'recording' if row.recording == 'Recording' else '' }}">{{ row.recording }}</td>
-        <td>{{ row.recording_file }}</td>
+        <td>{{ r.username }}</td>
+        <td>{{ r.last_online }}</td>
+        <td>{{ r.live_duration }}</td>
+        <td class="{{ 'online' if r.online else 'offline' }}">{{ 'Online' if r.online else 'Offline' }}</td>
+        <td class="{{ 'recording' if r.recording else '' }}">{{ 'Recording' if r.recording else 'Not Recording' }}</td>
+        <td>
+          {% if r.recording_file %}
+            <a href="/{{ r.recording_file }}" target="_blank">{{ r.recording_file }}</a>
+          {% else %}
+            -
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
