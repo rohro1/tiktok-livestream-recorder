@@ -5,11 +5,9 @@ from flask import Flask, redirect, render_template, request, url_for
 from threading import Thread
 from time import sleep
 
-# app logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-# import utils from src/utils
 from src.utils.oauth_drive import create_auth_url, fetch_and_store_credentials, get_drive_service, TOKEN_PATH
 from src.utils.status_tracker import StatusTracker
 from src.core.tiktok_api import TikTokAPI
@@ -17,7 +15,6 @@ from src.core.tiktok_recorder import TikTokLiveRecorder
 from src.utils.folder_manager import make_user_folders
 from src.utils.google_drive_uploader import GoogleDriveUploader
 
-# Config
 PORT = int(os.environ.get("PORT", 10000))
 OAUTH_CREDENTIALS_FILE = os.environ.get("OAUTH_CREDENTIALS_FILE", "credentials.json")
 OAUTH_REDIRECT = os.environ.get("OAUTH_REDIRECT", None)
@@ -27,7 +24,6 @@ RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "recordings")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "12"))
 
 app = Flask(__name__, template_folder="templates")
-
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
 def read_usernames(path):
@@ -96,8 +92,7 @@ def poll_loop():
                 logger.exception("Error while polling %s", username)
         sleep(POLL_INTERVAL)
 
-poll_thread = Thread(target=poll_loop, daemon=True)
-poll_thread.start()
+Thread(target=poll_loop, daemon=True).start()
 
 @app.route("/")
 def index():
@@ -112,12 +107,7 @@ def authorize():
 @app.route("/oauth2callback")
 def oauth2callback():
     redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
-    full_url = request.url
-    creds = fetch_and_store_credentials(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri, full_url)
-    if creds:
-        logger.info("OAuth success — credentials saved to %s", TOKEN_PATH)
-    else:
-        logger.warning("OAuth callback did not produce credentials")
+    creds = fetch_and_store_credentials(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri, request.url)
     return redirect(url_for("status"))
 
 @app.route("/status")
@@ -126,14 +116,12 @@ def status():
         return redirect(url_for("authorize"))
 
     table_data = []
-    # ✅ Use get_all() so all tracked usernames show up
     for username, info in status_tracker.get_all().items():
         table_data.append({
             "username": username,
             "last_online": info.get("last_online", "N/A"),
             "live_duration": info.get("live_duration", 0),
             "online": info.get("online", False),
-            "recording_duration": info.get("recording_duration", 0),
             "recording_status": "Recording" if info.get("recording", False) else "Not Recording"
         })
 

@@ -5,7 +5,7 @@ from datetime import datetime
 class StatusTracker:
     def __init__(self):
         self._lock = threading.RLock()
-        self._map = {}
+        self._map = {}  # username -> info dict
 
     def _ensure(self, username):
         with self._lock:
@@ -50,7 +50,7 @@ class StatusTracker:
             st = self._ensure(username)
             return st.get("recording_file")
 
-    # ✅ NEW: return all usernames and their info
     def get_all(self):
+        """Return copy of all username info for /status page"""
         with self._lock:
-            return {u: dict(info) for u, info in self._map.items()}
+            return {user: dict(info) for user, info in self._map.items()}
