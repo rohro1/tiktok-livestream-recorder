@@ -1,46 +1,36 @@
-import yt_dlp
+import subprocess
 import logging
 
 logger = logging.getLogger("tiktok-api")
 
 class TikTokAPI:
     def __init__(self, username: str):
-        self.username = username
-        self.url = f"https://www.tiktok.com/@{username}/live"
+        self.username = username.strip("@")
 
-    def is_live(self) -> bool:
+    def get_live_url(self):
         """
-        Uses yt-dlp to check if the TikTok user is live.
-        If yt-dlp finds a streaming URL, the user is live.
+        Returns m3u8 live stream URL if user is live, else None.
+        Uses yt-dlp.
         """
+        url = f"https://www.tiktok.com/@{self.username}/live"
         try:
-            ydl_opts = {
-                "quiet": True,
-                "skip_download": True,
-                "extract_flat": False,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(self.url, download=False)
-                if info and info.get("is_live"):
-                    return True
+            result = subprocess.run(
+                ["yt-dlp", "-g", url],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                live_url = result.stdout.strip().splitlines()[0]
+                logger.info("Live URL fetched for %s: %s", self.username, live_url)
+                return live_url
+            else:
+                logger.debug("No live stream found for %s", self.username)
+                return None
         except Exception as e:
-            logger.debug("yt-dlp check failed for %s: %s", self.username, e)
-        return False
+            logger.error("yt-dlp failed for %s: %s", self.username, e)
+            return None
 
-    def get_stream_url(self) -> str | None:
-        """
-        Returns the m3u8 livestream URL if live, otherwise None.
-        """
-        try:
-            ydl_opts = {
-                "quiet": True,
-                "skip_download": True,
-                "extract_flat": False,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(self.url, download=False)
-                if info and info.get("is_live") and "url" in info:
-                    return info["url"]
-        except Exception as e:
-            logger.debug("yt-dlp stream fetch failed for %s: %s", self.username, e)
-        return None
+    def is_live(self):
+        return self.get_live_url() is not None
