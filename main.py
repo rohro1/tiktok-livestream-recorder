@@ -5,11 +5,11 @@ from threading import Thread
 from time import sleep
 from datetime import datetime
 
-# App logging
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-# Import utils
+# Imports
 from utils.oauth_drive import create_auth_url, fetch_and_store_credentials, get_drive_service, TOKEN_PATH
 from utils.status_tracker import StatusTracker
 from core.tiktok_api import TikTokAPI
@@ -27,11 +27,9 @@ RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "recordings")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "12"))
 
 app = Flask(__name__, template_folder="templates")
-
-# Ensure recordings dir exists
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
-# Read usernames
+# Load usernames
 def read_usernames(path):
     out = []
     try:
@@ -46,7 +44,7 @@ def read_usernames(path):
 
 usernames = read_usernames(USERNAMES_FILE)
 
-# Status tracker and recorder management
+# Status and recorders
 status_tracker = StatusTracker()
 recorders = {}
 uploaders = {}
@@ -59,7 +57,7 @@ def recording_output_path(username):
 def poll_loop():
     logger.info("Starting poll loop (interval=%s)", POLL_INTERVAL)
     make_user_folders(usernames, RECORDINGS_DIR)
-    drive_service = get_drive_service()
+    drive_service = get_drive_service(OAUTH_CREDENTIALS_FILE, SCOPES)
     if drive_service:
         for u in usernames:
             uploaders[u] = GoogleDriveUploader(drive_service, drive_folder_root="TikTokRecordings")
@@ -94,7 +92,7 @@ def poll_loop():
                         status_tracker.set_recording_file(username, None)
                         status_tracker.update_status(username, recording=False)
             except Exception as e:
-                logger.exception("Error while polling %s: %s", username, e)
+                logger.exception("Error polling %s: %s", username, e)
         sleep(POLL_INTERVAL)
 
 Thread(target=poll_loop, daemon=True).start()

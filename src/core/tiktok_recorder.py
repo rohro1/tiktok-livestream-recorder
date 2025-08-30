@@ -1,65 +1,32 @@
-# src/core/tiktok_recorder.py
-import os
 import subprocess
-import logging
-import yt_dlp
-from time import time
-
-logger = logging.getLogger("tiktok-recorder")
-logger.setLevel(logging.INFO)
+import threading
 
 class TikTokLiveRecorder:
     def __init__(self, api, resolution="480p"):
         self.api = api
         self.resolution = resolution
-        self.process = None
-        self.start_time = None
-        self.output_path = None
+        self._thread = None
+        self._running = False
 
-    def start_recording(self, output_path):
-        """
-        Starts recording the livestream to the specified output path using ffmpeg.
-        """
-        url = self.api.get_live_url()
-        if not url:
-            logger.error(f"{self.api.username} is not live, cannot start recording.")
-            return False
-
-        self.output_path = output_path
-        ffmpeg_cmd = [
-            "ffmpeg", "-i", url, "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-maxrate", "1M", "-bufsize", "2M", "-s", self.resolution, "-f", "mp4", self.output_path
-        ]
-
-        try:
-            logger.info(f"Starting recording for {self.api.username} at {self.output_path}")
-            self.process = subprocess.Popen(ffmpeg_cmd)
-            self.start_time = time()
-            return True
-        except Exception as e:
-            logger.error(f"Error starting recording for {self.api.username}: {e}")
-            return False
-
-    def stop_recording(self):
-        """
-        Stops the recording process.
-        """
-        if self.process:
+    def start_recording(self, out_file):
+        self._running = True
+        def _record():
+            # Replace with actual livestream URL from TikTok API
+            url = f"https://example.com/live/{self.api.username}.m3u8"
+            cmd = ["ffmpeg", "-y", "-i", url, "-c", "copy", out_file]
             try:
-                self.process.terminate()
-                self.process.wait()
-                self.process = None
-                logger.info(f"Stopped recording for {self.api.username}")
+                subprocess.run(cmd)
             except Exception as e:
-                logger.error(f"Error stopping recording for {self.api.username}: {e}")
-        if self.output_path:
-            logger.info(f"Saved recording for {self.api.username} at {self.output_path}")
-        self.output_path = None
+                print("Recording failed:", e)
+            self._running = False
+
+        self._thread = threading.Thread(target=_record, daemon=True)
+        self._thread.start()
+        return True
 
     def is_running(self):
-        """
-        Checks if the recording process is still running.
-        """
-        if self.process:
-            return self.process.poll() is None
-        return False
+        return self._running
+
+    def stop_recording(self):
+        # Terminate thread is not safe, use flag in real implementation
+        self._running = False
