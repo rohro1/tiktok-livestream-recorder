@@ -1,48 +1,33 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
-    <title>TikTok Recorder Status</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-        th { background-color: #f2f2f2; }
-        .online { color: green; font-weight: bold; }
-        .offline { color: red; }
-    </style>
+  <title>TikTok Recorder Status</title>
+  <style>
+    body { font-family: sans-serif; margin: 2em; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
+    th { background: #eee; }
+  </style>
 </head>
 <body>
-    <h1>TikTok Recorder Dashboard</h1>
+  <h2>TikTok Recorder</h2>
+  {% if authorized %}
+    <p><b>✅ Google Drive Authorized</b></p>
+  {% else %}
+    <p><a href="/authorize">🔑 Authorize Google Drive</a></p>
+  {% endif %}
 
-    {% if drive_authorized %}
-        <p style="color:green; font-weight:bold;">Google Drive Authorized ✅</p>
-    {% else %}
-        <p style="color:red;">Google Drive Not Authorized ❌ — <a href="/authorize">Click here to authorize</a></p>
-    {% endif %}
-
-    <table>
-        <tr>
-            <th>Username</th>
-            <th>Status</th>
-            <th>Recording</th>
-            <th>Last Online</th>
-            <th>Recording File</th>
-        </tr>
-        {% for row in rows %}
-        <tr>
-            <td>{{ row.username }}</td>
-            <td class="{{ 'online' if row.online else 'offline' }}">{{ 'Online' if row.online else 'Offline' }}</td>
-            <td>{{ 'Yes' if row.recording else 'No' }}</td>
-            <td>{{ row.last_online }}</td>
-            <td>
-                {% if row.recording_file %}
-                    <a href="{{ row.recording_file }}" target="_blank">Download</a>
-                {% else %}
-                    -
-                {% endif %}
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
+  <table>
+    <tr><th>User</th><th>Online</th><th>Recording</th><th>Last Online</th><th>File</th></tr>
+    {% for row in rows %}
+      <tr>
+        <td>{{row.username}}</td>
+        <td>{{"✅" if row.online else "❌"}}</td>
+        <td>{{"🎥" if row.recording else "—"}}</td>
+        <td>{{row.last_online}}</td>
+        <td>{% if row.file %}<a href="{{row.file}}">file</a>{% endif %}</td>
+      </tr>
+    {% endfor %}
+  </table>
 </body>
 </html>

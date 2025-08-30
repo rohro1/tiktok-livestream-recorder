@@ -1,25 +1,28 @@
 import subprocess
 import logging
 
-logger = logging.getLogger("tiktok-recorder")
+logger = logging.getLogger("tiktok-api")
 
 class TikTokAPI:
-    def __init__(self, username):
+    def __init__(self, username: str):
         self.username = username
 
-    def is_live(self):
-        """Check if TikTok user is live using yt-dlp"""
+    def get_stream_url(self):
+        """Return HLS URL if user is live, else None"""
         try:
-            url = f"https://www.tiktok.com/@{self.username}/live"
-            cmd = ["yt-dlp", "--no-warnings", "--flat-playlist", "-j", url]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-
+            cmd = [
+                "yt-dlp",
+                f"https://www.tiktok.com/@{self.username}/live",
+                "--no-warnings",
+                "--skip-download",
+                "-g"
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
             if result.returncode == 0 and result.stdout.strip():
-                return True  # Live
-            return False  # Not live
-        except subprocess.TimeoutExpired:
-            logger.warning("Timeout checking live for %s", self.username)
-            return False
+                return result.stdout.strip()
         except Exception as e:
-            logger.error("yt-dlp check failed for %s: %s", self.username, e)
-            return False
+            logger.warning("yt-dlp error for %s: %s", self.username, e)
+        return None
+
+    def is_live(self):
+        return self.get_stream_url() is not None
