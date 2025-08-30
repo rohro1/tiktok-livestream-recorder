@@ -1,48 +1,53 @@
 # src/core/tiktok_api.py
-import subprocess
-import json
+import yt_dlp
 import logging
 
-logger = logging.getLogger("TikTokAPI")
+logger = logging.getLogger("tiktok-api")
 logger.setLevel(logging.INFO)
 
 class TikTokAPI:
-    def __init__(self, username, timeout=15):
+    def __init__(self, username):
         self.username = username
-        self.timeout = timeout  # seconds
+        self.url = f"https://www.tiktok.com/@{username}/live"
 
     def is_live(self):
         """
-        Returns True if user is currently live, False otherwise.
-        Handles empty output, JSON errors, and timeouts gracefully.
+        Checks if the user is live using yt-dlp's URL extraction.
+        Returns True if live, False if offline.
         """
-        try:
-            # yt-dlp JSON query for livestream
-            cmd = [
-                "yt-dlp",
-                f"https://www.tiktok.com/@{self.username}",
-                "--dump-json",
-                "--skip-download"
-            ]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout
-            )
-            output = result.stdout.strip()
-            if not output:
-                logger.warning("TikTokAPI: empty stdout for %s", self.username)
-                return False
-            data = json.loads(output)
-            is_live = data.get("is_live", False)
-            return bool(is_live)
-        except subprocess.TimeoutExpired:
-            logger.error("TikTokAPI: Command timed out for %s", self.username)
-            return False
-        except json.JSONDecodeError as e:
-            logger.error("TikTokAPI: JSON decode error for %s: %s", self.username, e)
-            return False
-        except Exception as e:
-            logger.exception("TikTokAPI: Unexpected error for %s: %s", self.username, e)
-            return False
+        ydl_opts = {
+            "quiet": True,
+            "simulate": True,  # We don't want to download the stream, just simulate
+            "extract_flat": True,  # Extract the URL without downloading
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(self.url, download=False)
+                if "entries" in info:
+                    live_entry = next((entry for entry in info["entries"] if entry.get("is_live")), None)
+                    return live_entry is not None
+            except Exception as e:
+                logger.error(f"Error checking live status for {self.username}: {e}")
+        return False
+
+    def get_live_url(self):
+        """
+        Returns the URL of the livestream if live, otherwise None.
+        """
+        ydl_opts = {
+            "quiet": True,
+            "simulate": True,
+            "extract_flat": True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(self.url, download=False)
+                if "entries" in info:
+                    live_entry = next((entry for entry in info["entries"] if entry.get("is_live")), None)
+                    if live_entry:
+                        return live_entry.get("url")
+            except Exception as e:
+                logger.error(f"Error fetching live stream URL for {self.username}: {e}")
+        return None

@@ -1,67 +1,65 @@
 # src/core/tiktok_recorder.py
-import threading
+import os
 import subprocess
 import logging
-from time import sleep
+import yt_dlp
+from time import time
 
-logger = logging.getLogger("TikTokLiveRecorder")
+logger = logging.getLogger("tiktok-recorder")
 logger.setLevel(logging.INFO)
-
-FFMPEG_BIN = "ffmpeg"
 
 class TikTokLiveRecorder:
     def __init__(self, api, resolution="480p"):
         self.api = api
         self.resolution = resolution
-        self.proc = None
-        self._running = False
-        self.lock = threading.RLock()
-
-    def is_running(self):
-        with self.lock:
-            return self._running
+        self.process = None
+        self.start_time = None
+        self.output_path = None
 
     def start_recording(self, output_path):
         """
-        Start recording the live stream.
+        Starts recording the livestream to the specified output path using ffmpeg.
         """
-        with self.lock:
-            url = self.api.get_stream_url()
-            if not url:
-                logger.info("No live stream URL for %s", self.api.username)
-                return False
-            cmd = [
-                FFMPEG_BIN,
-                "-i", url,
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-tune", "zerolatency",
-                "-vf", f"scale=-2:480",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-y",
-                output_path
-            ]
-            try:
-                self.proc = subprocess.Popen(cmd)
-                self._running = True
-                logger.info("Started recording %s to %s", self.api.username, output_path)
-                return True
-            except Exception:
-                logger.exception("Failed to start ffmpeg for %s", self.api.username)
-                self._running = False
-                return False
+        url = self.api.get_live_url()
+        if not url:
+            logger.error(f"{self.api.username} is not live, cannot start recording.")
+            return False
+
+        self.output_path = output_path
+        ffmpeg_cmd = [
+            "ffmpeg", "-i", url, "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-maxrate", "1M", "-bufsize", "2M", "-s", self.resolution, "-f", "mp4", self.output_path
+        ]
+
+        try:
+            logger.info(f"Starting recording for {self.api.username} at {self.output_path}")
+            self.process = subprocess.Popen(ffmpeg_cmd)
+            self.start_time = time()
+            return True
+        except Exception as e:
+            logger.error(f"Error starting recording for {self.api.username}: {e}")
+            return False
 
     def stop_recording(self):
         """
-        Stop the ffmpeg process.
+        Stops the recording process.
         """
-        with self.lock:
-            if self.proc and self._running:
-                self.proc.terminate()
-                try:
-                    self.proc.wait(timeout=10)
-                except Exception:
-                    self.proc.kill()
-                self._running = False
-                logger.info("Stopped recording %s", self.api.username)
+        if self.process:
+            try:
+                self.process.terminate()
+                self.process.wait()
+                self.process = None
+                logger.info(f"Stopped recording for {self.api.username}")
+            except Exception as e:
+                logger.error(f"Error stopping recording for {self.api.username}: {e}")
+        if self.output_path:
+            logger.info(f"Saved recording for {self.api.username} at {self.output_path}")
+        self.output_path = None
+
+    def is_running(self):
+        """
+        Checks if the recording process is still running.
+        """
+        if self.process:
+            return self.process.poll() is None
+        return False

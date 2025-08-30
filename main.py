@@ -1,34 +1,43 @@
+# main.py
 import os
 import logging
 from flask import Flask, redirect, render_template, request, url_for
 from threading import Thread
 from time import sleep
-from datetime import datetime
 
-# Initialize logging
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-# Import relevant functions and classes
-from src.utils.oauth_drive import create_auth_url, fetch_and_store_credentials, get_drive_service, TOKEN_PATH
+# Import necessary modules
+from src.utils.oauth_drive import create_auth_url, fetch_and_store_credentials, get_drive_service
 from src.utils.status_tracker import StatusTracker
-from src.core.tiktok_api import TikTokAPI  # Ensure this path aligns with the project
+from src.core.tiktok_api import TikTokAPI
 from src.core.tiktok_recorder import TikTokLiveRecorder
 from src.utils.folder_manager import make_user_folders
 from src.utils.google_drive_uploader import GoogleDriveUploader
 
-# Configuration
+# Config
 PORT = int(os.environ.get("PORT", 10000))
 OAUTH_CREDENTIALS_FILE = os.environ.get("OAUTH_CREDENTIALS_FILE", "credentials.json")
-OAUTH_REDIRECT = os.environ.get("OAUTH_REDIRECT", None)
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+OAUTH_REDIRECT = os.environ.get("OAUTH_REDIRECT", None)  # e.g. https://yourdomain.com/oauth2callback
 USERNAMES_FILE = os.environ.get("USERNAMES_FILE", "usernames.txt")
 RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "recordings")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "12"))
-MAX_RETRIES = 3  # Maximum retries on failed requests
 
 app = Flask(__name__, template_folder="templates")
-os.makedirs(RECORDINGS_DIR, exist_ok=True)
+
+# Initialize status tracker
+status_tracker = StatusTracker()
+recorders = {}  # username -> TikTokLiveRecorder
+uploaders = {}  # username -> GoogleDriveUploader (when needed)
+
+# helper to build output path
+def recording_output_path(username):
+    os.makedirs(os.path.join(RECORDINGS_DIR, username), exist_ok=True)
+    from datetime import datetime
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return os.path.join(RECORDINGS_DIR, username, f"{username}_{ts}.mp4")
 
 # Read usernames from file
 def read_usernames(path):
@@ -45,146 +54,71 @@ def read_usernames(path):
 
 usernames = read_usernames(USERNAMES_FILE)
 
-# Initialize status tracker, recorders, and uploaders
-status_tracker = StatusTracker()
-recorders = {}
-uploaders = {}
-
-# Helper function to generate recording file path
-def recording_output_path(username):
-    os.makedirs(os.path.join(RECORDINGS_DIR, username), exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    return os.path.join(RECORDINGS_DIR, username, f"{username}_{ts}.mp4")
-
-# Function to retry fetching live status for a user
-def fetch_live_status_with_retries(username, retries=MAX_RETRIES):
-    for attempt in range(retries):
-        try:
-            api = TikTokAPI(username)
-            is_live = api.is_live()
-            return is_live
-        except TimeoutError:
-            logger.warning(f"Timeout while checking live status for {username}. Retrying ({attempt + 1}/{retries})...")
-        except Exception as e:
-            logger.error(f"Error checking live status for {username}: {e}")
-            return False  # Return False in case of any error
-        sleep(2)  # Wait before retrying
-    return False  # After retries, return False if still unsuccessful
-
-# Poll loop to continuously check for live status and manage recordings
+# Polling loop (worker thread)
 def poll_loop():
     logger.info("Starting poll loop (interval=%s)", POLL_INTERVAL)
     make_user_folders(usernames, RECORDINGS_DIR)
-    
     drive_service = get_drive_service()
+
     if drive_service:
         for u in usernames:
             uploaders[u] = GoogleDriveUploader(drive_service, drive_folder_root="TikTokRecordings")
-    
+
     while True:
         for username in usernames:
             try:
-                # Fetch live status with retries
-                is_live = fetch_live_status_with_retries(username)
-                
-                # Handle live status change
+                api = TikTokAPI(username)
+                is_live = api.is_live()
+                prev = status_tracker.get_status(username)
                 if is_live:
-                    # Set user to online only if they were previously offline
-                    if not status_tracker.get_status(username).get("online", False):
-                        status_tracker.update_status(username, online=True)
-                        logger.info(f"{username} is now online.")
-
-                    # Start recording if not already recording
+                    status_tracker.update_status(username, online=True)
                     if username not in recorders or not recorders[username].is_running():
                         recorder = TikTokLiveRecorder(api, resolution="480p")
                         out_path = recording_output_path(username)
-                        try:
-                            ok = recorder.start_recording(out_path)
-                            if ok:
-                                recorders[username] = recorder
-                                status_tracker.set_recording_file(username, out_path)
-                                status_tracker.update_status(username, recording=True)
-                                logger.info(f"Started recording for {username}, saving to {out_path}.")
-                            else:
-                                status_tracker.update_status(username, recording=False)
-                                logger.error(f"Failed to start recording for {username}.")
-                        except Exception as e:
-                            logger.error(f"Error while starting recording for {username}: {e}")
+                        ok = recorder.start_recording(out_path)
+                        if ok:
+                            recorders[username] = recorder
+                            status_tracker.set_recording_file(username, out_path)
+                            status_tracker.update_status(username, recording=True)
+                        else:
+                            logger.info("Failed to start recording for %s", username)
                             status_tracker.update_status(username, recording=False)
-                    
-                    # Track live duration (if the user has gone live before)
-                    live_time = status_tracker.get_status(username).get("last_online")
-                    if live_time:
-                        live_duration = (datetime.utcnow() - live_time).total_seconds()
-                        status_tracker.update_status(username, live_duration=live_duration)
-                    else:
-                        # First time they went live
-                        status_tracker.update_status(username, last_online=datetime.utcnow())
                 else:
-                    # If the user is offline, stop the recorder if needed
-                    status_tracker.update_status(username, online=False, recording=False)
+                    status_tracker.update_status(username, online=False)
                     rec = recorders.get(username)
                     if rec and rec.is_running():
                         rec.stop_recording()
                         out_file = status_tracker.get_recording_file(username)
                         if out_file and os.path.exists(out_file) and username in uploaders:
-                            try:
-                                uploaders[username].upload_file(out_file, remote_subfolder=username)
-                                logger.info(f"Uploaded {out_file} to Google Drive for {username}.")
-                            except Exception as e:
-                                logger.exception(f"Upload failed for {username}: {e}")
+                            uploaders[username].upload_file(out_file, remote_subfolder=username)
                         status_tracker.set_recording_file(username, None)
+                        status_tracker.update_status(username, recording=False)
             except Exception:
-                logger.exception(f"Unhandled error while polling {username}")
+                logger.exception("Error while polling %s", username)
         sleep(POLL_INTERVAL)
 
-# Start the poll loop in a background thread
-Thread(target=poll_loop, daemon=True).start()
+# Start polling thread
+poll_thread = Thread(target=poll_loop, daemon=True)
+poll_thread.start()
 
-# Flask routes
 @app.route("/")
 def index():
     return redirect(url_for("status"))
 
-@app.route("/authorize")
-def authorize():
-    redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
-    auth_url = create_auth_url(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri)
-    return render_template("authorize.html", auth_url=auth_url)
-
-@app.route("/oauth2callback")
-def oauth2callback():
-    redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
-    fetch_and_store_credentials(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri, request.url)
-    return redirect(url_for("status"))
-
 @app.route("/status")
 def status():
-    if not os.path.exists(TOKEN_PATH):
-        return redirect(url_for("authorize"))
-
-    rows = []
+    data = []
     for username in usernames:
-        info = status_tracker.get_status(username)
-        last_online = info.get("last_online", "N/A")
-        live_duration = info.get("live_duration", 0)
-        online = info.get("online", False)
-        recording = info.get("recording", False)
-        recording_file = info.get("recording_file")
-        
-        # Update status with clearer information for recording
-        recording_status = "Recording" if recording else "Not Recording"
-        recording_file_status = f'<a href="/{recording_file}" target="_blank">{recording_file}</a>' if recording_file else "-"
-
-        rows.append({
+        st = status_tracker.get_status(username)
+        data.append({
             "username": username,
-            "last_online": last_online if last_online != "N/A" else "N/A",
-            "live_duration": live_duration,
-            "online": "Online" if online else "Offline",
-            "recording": recording_status,
-            "recording_file": recording_file_status
+            "last_online": st.get("last_online") or "N/A",
+            "live_duration": st.get("live_duration", 0),
+            "online": st.get("online", False),
+            "recording": st.get("recording", False),
+            "recording_file": st.get("recording_file", None),
         })
-    return render_template("status.html", rows=rows)
+    return render_template("status.html", rows=data)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)

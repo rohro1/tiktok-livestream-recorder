@@ -1,3 +1,4 @@
+# src/utils/status_tracker.py
 import threading
 from datetime import datetime
 
@@ -25,22 +26,20 @@ class StatusTracker:
 
     def update_status(self, username, online=None, live_duration=None, recording=None):
         with self._lock:
-            st = self._ensure(username)
+            status = self._ensure(username)
             if online is not None:
-                st["online"] = online
-                if online:
-                    st["last_online"] = datetime.utcnow()
+                status["online"] = online
             if live_duration is not None:
-                st["live_duration"] = live_duration
+                status["live_duration"] = live_duration
             if recording is not None:
-                st["recording"] = recording
+                status["recording"] = recording
 
     def set_recording_file(self, username, path):
         with self._lock:
-            st = self._ensure(username)
-            st["recording_file"] = path
+            status = self._ensure(username)
+            status["recording_file"] = path
 
     def get_recording_file(self, username):
         with self._lock:
-            st = self._ensure(username)
-            return st.get("recording_file")
+            status = self._ensure(username)
+            return status.get("recording_file")
