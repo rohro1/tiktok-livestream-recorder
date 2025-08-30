@@ -24,6 +24,10 @@ class StatusTracker:
             self._ensure(username)
             return dict(self._map[username])
 
+    def get_all(self):
+        with self._lock:
+            return {k: dict(v) for k, v in self._map.items()}
+
     def update_status(self, username, online=None, live_duration=None, recording=None):
         with self._lock:
             st = self._ensure(username)
@@ -48,8 +52,3 @@ class StatusTracker:
         with self._lock:
             st = self._ensure(username)
             return st.get("recording_file")
-
-    # <<< ADD THIS METHOD >>>
-    def get_all(self):
-        with self._lock:
-            return {user: dict(info) for user, info in self._map.items()}

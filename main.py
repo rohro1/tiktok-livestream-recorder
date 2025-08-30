@@ -61,7 +61,13 @@ def poll_loop():
         for username in usernames:
             try:
                 api = TikTokAPI(username)
-                is_live = api.is_live()
+                try:
+                    is_live = api.is_live()
+                except Exception as e:
+                    logger.warning("Failed to check live status for %s: %s", username, e)
+                    # Don't fail silently: mark online=False temporarily
+                    is_live = False
+
                 if is_live:
                     status_tracker.update_status(username, online=True)
                     if username not in recorders or not recorders[username].is_running():
@@ -76,6 +82,7 @@ def poll_loop():
                             logger.info("Failed to start recording for %s", username)
                             status_tracker.update_status(username, recording=False)
                 else:
+                    # stop recorder if running
                     status_tracker.update_status(username, online=False)
                     rec = recorders.get(username)
                     if rec and rec.is_running():
@@ -116,7 +123,8 @@ def status():
         return redirect(url_for("authorize"))
 
     table_data = []
-    for username, info in status_tracker.get_all().items():
+    for username in usernames:
+        info = status_tracker.get_status(username)
         table_data.append({
             "username": username,
             "last_online": info.get("last_online", "N/A"),
