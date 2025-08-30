@@ -64,10 +64,10 @@ def poll_loop():
                 try:
                     is_live = api.is_live()
                 except Exception as e:
-                    logger.warning("Failed to check live status for %s: %s", username, e)
-                    # Don't fail silently: mark online=False temporarily
-                    is_live = False
+                    logger.error("Error checking live status for %s: %s", username, e)
+                    is_live = False  # treat as offline if check fails
 
+                prev_status = status_tracker.get_status(username)
                 if is_live:
                     status_tracker.update_status(username, online=True)
                     if username not in recorders or not recorders[username].is_running():
@@ -79,11 +79,10 @@ def poll_loop():
                             status_tracker.set_recording_file(username, out_path)
                             status_tracker.update_status(username, recording=True)
                         else:
-                            logger.info("Failed to start recording for %s", username)
                             status_tracker.update_status(username, recording=False)
                 else:
-                    # stop recorder if running
-                    status_tracker.update_status(username, online=False)
+                    # offline (or check failed)
+                    status_tracker.update_status(username, online=False, recording=False)
                     rec = recorders.get(username)
                     if rec and rec.is_running():
                         rec.stop_recording()
@@ -94,9 +93,8 @@ def poll_loop():
                             except Exception as e:
                                 logger.exception("Upload failed for %s: %s", username, e)
                         status_tracker.set_recording_file(username, None)
-                        status_tracker.update_status(username, recording=False)
             except Exception:
-                logger.exception("Error while polling %s", username)
+                logger.exception("Unhandled error while polling %s", username)
         sleep(POLL_INTERVAL)
 
 Thread(target=poll_loop, daemon=True).start()
