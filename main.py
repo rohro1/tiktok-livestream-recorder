@@ -57,6 +57,7 @@ def poll_loop():
     if drive_service:
         for u in usernames:
             uploaders[u] = GoogleDriveUploader(drive_service, drive_folder_root="TikTokRecordings")
+    
     while True:
         for username in usernames:
             try:
@@ -70,6 +71,7 @@ def poll_loop():
                 if is_live:
                     # Always update online=True when live
                     status_tracker.update_status(username, online=True)
+
                     if username not in recorders or not recorders[username].is_running():
                         recorder = TikTokLiveRecorder(api, resolution="480p")
                         out_path = recording_output_path(username)
@@ -81,8 +83,16 @@ def poll_loop():
                             status_tracker.update_status(username, recording=True)
                         else:
                             status_tracker.update_status(username, recording=False)
-                    # Update live duration correctly
-                    status_tracker.update_status(username, live_duration=0)  # Ensure it starts fresh when online
+
+                    # Track live duration by checking time since the user went live
+                    live_time = status_tracker.get_status(username).get("last_online")
+                    if live_time:
+                        live_duration = (datetime.utcnow() - live_time).total_seconds()
+                        status_tracker.update_status(username, live_duration=live_duration)
+                    else:
+                        # First time they went live (initialize)
+                        status_tracker.update_status(username, last_online=datetime.utcnow())
+                
                 else:
                     # Offline
                     status_tracker.update_status(username, online=False, recording=False)
