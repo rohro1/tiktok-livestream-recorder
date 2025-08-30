@@ -5,11 +5,9 @@ from threading import Thread
 from time import sleep
 from datetime import datetime
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-# Imports
 from utils.oauth_drive import create_auth_url, fetch_and_store_credentials, get_drive_service, TOKEN_PATH
 from utils.status_tracker import StatusTracker
 from core.tiktok_api import TikTokAPI
@@ -17,7 +15,6 @@ from core.tiktok_recorder import TikTokLiveRecorder
 from utils.folder_manager import make_user_folders
 from utils.google_drive_uploader import GoogleDriveUploader
 
-# Config
 PORT = int(os.environ.get("PORT", 10000))
 OAUTH_CREDENTIALS_FILE = os.environ.get("OAUTH_CREDENTIALS_FILE", "credentials.json")
 OAUTH_REDIRECT = os.environ.get("OAUTH_REDIRECT", None)
@@ -29,7 +26,6 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "12"))
 app = Flask(__name__, template_folder="templates")
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
-# Load usernames
 def read_usernames(path):
     out = []
     try:
@@ -43,8 +39,6 @@ def read_usernames(path):
     return out
 
 usernames = read_usernames(USERNAMES_FILE)
-
-# Status and recorders
 status_tracker = StatusTracker()
 recorders = {}
 uploaders = {}
