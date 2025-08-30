@@ -72,6 +72,7 @@ def poll_loop():
                     # Set the user to online only if they were previously offline
                     if not status_tracker.get_status(username).get("online", False):
                         status_tracker.update_status(username, online=True)
+                        logger.info(f"{username} is now online.")
 
                     if username not in recorders or not recorders[username].is_running():
                         # Start recording if not already running
@@ -82,10 +83,10 @@ def poll_loop():
                             recorders[username] = recorder
                             status_tracker.set_recording_file(username, out_path)
                             status_tracker.update_status(username, recording=True)
-                            logger.info("Started recording for %s", username)
+                            logger.info(f"Started recording for {username}, recording to {out_path}.")
                         else:
                             status_tracker.update_status(username, recording=False)
-
+                            logger.error(f"Failed to start recording for {username}.")
                     # Track live duration by checking time since the user went live
                     live_time = status_tracker.get_status(username).get("last_online")
                     if live_time:
@@ -105,8 +106,9 @@ def poll_loop():
                         if out_file and os.path.exists(out_file) and username in uploaders:
                             try:
                                 uploaders[username].upload_file(out_file, remote_subfolder=username)
+                                logger.info(f"Uploaded {out_file} to Google Drive for {username}.")
                             except Exception as e:
-                                logger.exception("Upload failed for %s: %s", username, e)
+                                logger.exception(f"Upload failed for {username}: {e}")
                         status_tracker.set_recording_file(username, None)
             except Exception:
                 logger.exception("Unhandled error while polling %s", username)
