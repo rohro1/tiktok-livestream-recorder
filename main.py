@@ -4,6 +4,7 @@ import logging
 from flask import Flask, redirect, render_template, request, url_for
 from threading import Thread
 from time import sleep
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
@@ -46,7 +47,6 @@ uploaders = {}
 
 def recording_output_path(username):
     os.makedirs(os.path.join(RECORDINGS_DIR, username), exist_ok=True)
-    from datetime import datetime
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     return os.path.join(RECORDINGS_DIR, username, f"{username}_{ts}.mp4")
 
@@ -61,14 +61,14 @@ def poll_loop():
         for username in usernames:
             try:
                 api = TikTokAPI(username)
+                is_live = False
                 try:
                     is_live = api.is_live()
                 except Exception as e:
                     logger.error("Error checking live status for %s: %s", username, e)
-                    is_live = False  # treat as offline if check fails
 
-                prev_status = status_tracker.get_status(username)
                 if is_live:
+                    # always update online=True when live
                     status_tracker.update_status(username, online=True)
                     if username not in recorders or not recorders[username].is_running():
                         recorder = TikTokLiveRecorder(api, resolution="480p")
@@ -77,11 +77,12 @@ def poll_loop():
                         if ok:
                             recorders[username] = recorder
                             status_tracker.set_recording_file(username, out_path)
+                            # fix: mark recording True only after recorder starts
                             status_tracker.update_status(username, recording=True)
                         else:
                             status_tracker.update_status(username, recording=False)
                 else:
-                    # offline (or check failed)
+                    # offline
                     status_tracker.update_status(username, online=False, recording=False)
                     rec = recorders.get(username)
                     if rec and rec.is_running():
@@ -112,7 +113,7 @@ def authorize():
 @app.route("/oauth2callback")
 def oauth2callback():
     redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
-    creds = fetch_and_store_credentials(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri, request.url)
+    fetch_and_store_credentials(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri, request.url)
     return redirect(url_for("status"))
 
 @app.route("/status")
@@ -120,18 +121,18 @@ def status():
     if not os.path.exists(TOKEN_PATH):
         return redirect(url_for("authorize"))
 
-    table_data = []
+    rows = []
     for username in usernames:
         info = status_tracker.get_status(username)
-        table_data.append({
+        rows.append({
             "username": username,
             "last_online": info.get("last_online", "N/A"),
             "live_duration": info.get("live_duration", 0),
             "online": info.get("online", False),
-            "recording_status": "Recording" if info.get("recording", False) else "Not Recording"
+            "recording": info.get("recording", False),
+            "recording_file": info.get("recording_file")
         })
-
-    return render_template("status.html", streams=table_data)
+    return render_template("status.html", rows=rows)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)

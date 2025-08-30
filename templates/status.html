@@ -1,40 +1,42 @@
-<!-- templates/status.html -->
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>TikTok Live Status</title>
-    <style>
-        table { border-collapse: collapse; width: 80%; margin: auto; }
-        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
-        th { background-color: #f2f2f2; }
-        .online { color: green; font-weight: bold; }
-        .offline { color: red; font-weight: bold; }
-    </style>
+  <meta charset="utf-8" />
+  <title>TikTok Livestream Status</title>
+  <style>
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #f4f4f4; }
+    .online { color: green; font-weight: bold; }
+    .offline { color: gray; }
+    .recording { color: red; font-weight: bold; }
+  </style>
 </head>
 <body>
-    <h2 style="text-align: center;">TikTok Live Status</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Username</th>
-                <th>Online Status</th>
-                <th>Recording Status</th>
-                <th>Last Online</th>
-                <th>Live Duration (s)</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for stream in streams %}
-            <tr>
-                <td>{{ stream.username }}</td>
-                <td class="{{ 'online' if stream.online else 'offline' }}">{{ 'Online' if stream.online else 'Offline' }}</td>
-                <td>{{ stream.recording_status }}</td>
-                <td>{{ stream.last_online }}</td>
-                <td>{{ stream.live_duration }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+  <h1>Livestream Status</h1>
+  <table>
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>Last Online (UTC)</th>
+        <th>Live Duration (s)</th>
+        <th>Online</th>
+        <th>Recording</th>
+        <th>Recording File</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.username }}</td>
+        <td>{{ r.last_online }}</td>
+        <td>{{ r.live_duration }}</td>
+        <td class="{{ 'online' if r.online else 'offline' }}">{{ 'Online' if r.online else 'Offline' }}</td>
+        <td class="{{ 'recording' if r.recording else '' }}">{{ 'Recording' if r.recording else 'Not Recording' }}</td>
+        <td>{% if r.recording_file %}<a href="/{{ r.recording_file }}" target="_blank">File</a>{% else %}-{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </body>
 </html>

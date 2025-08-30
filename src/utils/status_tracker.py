@@ -21,23 +21,17 @@ class StatusTracker:
 
     def get_status(self, username):
         with self._lock:
-            self._ensure(username)
-            return dict(self._map[username])
-
-    def get_all(self):
-        with self._lock:
-            return {k: dict(v) for k, v in self._map.items()}
+            st = self._ensure(username)
+            return dict(st)
 
     def update_status(self, username, online=None, live_duration=None, recording=None):
         with self._lock:
             st = self._ensure(username)
             now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             if online is not None:
+                st["online"] = online
                 if online:
-                    st["online"] = True
                     st["last_online"] = now
-                else:
-                    st["online"] = False
             if live_duration is not None:
                 st["live_duration"] = live_duration
             if recording is not None:
