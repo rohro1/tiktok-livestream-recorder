@@ -3,16 +3,6 @@ from threading import Lock
 from datetime import datetime
 
 class StatusTracker:
-    """
-    Minimal thread-safe status tracker.
-    Stored per-username dict with fields:
-      - online (bool)
-      - recording (bool)
-      - last_online (iso timestamp)
-      - live_start (datetime or None)
-      - live_duration (seconds)
-      - recording_file (path or None)
-    """
     def __init__(self):
         self._data = {}
         self._lock = Lock()
@@ -28,17 +18,18 @@ class StatusTracker:
                 "recording_file": None,
             }
 
-    def update_status(self, username, online=False, recording=None):
+    def update_status(self, username, online=None, recording=None):
         with self._lock:
             self._ensure(username)
             entry = self._data[username]
-            if online and not entry["online"]:
-                entry["live_start"] = datetime.utcnow()
-            if not online and entry["online"]:
-                entry["last_online"] = datetime.utcnow().isoformat()
-                entry["live_start"] = None
-                entry["live_duration"] = 0
-            entry["online"] = online
+            if online is not None:
+                if online and not entry["online"]:
+                    entry["live_start"] = datetime.utcnow()
+                if not online and entry["online"]:
+                    entry["last_online"] = datetime.utcnow().isoformat()
+                    entry["live_start"] = None
+                    entry["live_duration"] = 0
+                entry["online"] = bool(online)
             if recording is not None:
                 entry["recording"] = bool(recording)
 
@@ -64,7 +55,6 @@ class StatusTracker:
         with self._lock:
             self._ensure(username)
             d = dict(self._data[username])
-            # format times as iso strings
             if d["live_start"]:
                 d["live_start"] = d["live_start"].isoformat()
             return d

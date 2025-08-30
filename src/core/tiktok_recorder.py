@@ -1,73 +1,73 @@
+# src/core/tiktok_recorder.py
 import subprocess
 import threading
-import os
+import shlex
 import logging
-import tempfile
-from utils.google_drive_uploader import GoogleDriveUploader
+import os
 
-logger = logging.getLogger("tiktok-recorder")
+logger = logging.getLogger("tiktok_recorder")
+
+FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")  # if you bundle a static ffmpeg, set env var to its path
 
 class TikTokLiveRecorder:
-    def __init__(self, api, uploader: GoogleDriveUploader, resolution="480p"):
-        self.api = api
-        self.uploader = uploader
-        self.resolution = resolution
+    """
+    Simple wrapper around ffmpeg to record a live HLS/DASH stream URL to a local file.
+    The recorder writes to a temporary file path and exposes is_running(), start_recording(), stop_recording().
+    """
+    def __init__(self, stream_url: str):
+        self.stream_url = stream_url
         self.proc = None
-        self.thread = None
-        self.running = False
-        self.tmpfile = None
+        self.lock = threading.Lock()
 
-    def start_recording(self):
-        live_url = self.api.get_live_url()
-        if not live_url:
-            logger.warning("%s is not live, skipping recording", self.api.username)
+    def is_running(self) -> bool:
+        with self.lock:
+            return self.proc is not None and self.proc.poll() is None
+
+    def start_recording(self, out_path: str, resolution: str = "480p") -> bool:
+        if not self.stream_url:
+            logger.warning("No stream_url provided to recorder (will still attempt to run ffmpeg to probe).")
+        # ffmpeg command: read input (stream_url) and transcode to mp4 at ~480p
+        ffmpeg_cmd = [
+            FFMPEG_BIN,
+            "-y",
+            "-hide_banner",
+            "-loglevel", "warning",
+            "-i", self.stream_url or "pipe:"),
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-maxrate", "1000k",
+            "-bufsize", "2000k",
+            "-vf", "scale=-2:480",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-f", "mp4",
+            out_path
+        ]
+        # Python lists -> shell exec
+        try:
+            with self.lock:
+                # if ffmpeg binary not present, this will raise FileNotFoundError
+                self.proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            logger.info("Started ffmpeg (pid=%s) -> %s", self.proc.pid if self.proc else None, out_path)
+            return True
+        except FileNotFoundError:
+            logger.exception("ffmpeg binary not found. Set FFMPEG_BIN env to a valid ffmpeg binary or include ffmpeg in image.")
+            return False
+        except Exception:
+            logger.exception("Failed to start ffmpeg")
             return False
 
-        fd, self.tmpfile = tempfile.mkstemp(suffix=".mp4")
-        os.close(fd)
-
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", live_url,
-            "-c", "copy",
-            "-f", "mp4",
-            self.tmpfile,
-        ]
-        logger.info("Recording started for %s → %s", self.api.username, self.tmpfile)
-
-        def run_ffmpeg():
-            try:
-                self.proc = subprocess.Popen(
-                    cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
-                self.proc.wait()
-            finally:
-                self.running = False
-                if self.tmpfile and os.path.exists(self.tmpfile):
-                    try:
-                        remote_name = os.path.basename(self.tmpfile)
-                        self.uploader.upload_file(
-                            self.tmpfile,
-                            remote_subfolder=self.api.username,
-                            remote_name=remote_name,
-                        )
-                        os.remove(self.tmpfile)
-                        logger.info("Uploaded and cleaned up %s", self.tmpfile)
-                    except Exception as e:
-                        logger.error("Upload failed for %s: %s", self.api.username, e)
-
-        self.thread = threading.Thread(target=run_ffmpeg, daemon=True)
-        self.thread.start()
-        self.running = True
-        return True
-
     def stop_recording(self):
-        if self.proc and self.running:
-            logger.info("Stopping recording for %s", self.api.username)
-            self.proc.terminate()
-            self.proc.wait()
-            self.running = False
-
-    def is_running(self):
-        return self.running
+        with self.lock:
+            if not self.proc:
+                return
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=15)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+            self.proc = None
+            logger.info("Stopped ffmpeg recording")

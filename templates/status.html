@@ -1,33 +1,42 @@
 <!doctype html>
 <html>
-<head>
-  <title>TikTok Recorder Status</title>
-  <style>
-    body { font-family: sans-serif; margin: 2em; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
-    th { background: #eee; }
-  </style>
-</head>
-<body>
-  <h2>TikTok Recorder</h2>
-  {% if authorized %}
-    <p><b>✅ Google Drive Authorized</b></p>
-  {% else %}
-    <p><a href="/authorize">🔑 Authorize Google Drive</a></p>
-  {% endif %}
-
-  <table>
-    <tr><th>User</th><th>Online</th><th>Recording</th><th>Last Online</th><th>File</th></tr>
-    {% for row in rows %}
-      <tr>
-        <td>{{row.username}}</td>
-        <td>{{"✅" if row.online else "❌"}}</td>
-        <td>{{"🎥" if row.recording else "—"}}</td>
-        <td>{{row.last_online}}</td>
-        <td>{% if row.file %}<a href="{{row.file}}">file</a>{% endif %}</td>
-      </tr>
-    {% endfor %}
-  </table>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <title>TikTok Recorder — Status</title>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 24px; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+      th { background: #f7f7f7; }
+      .online { color: green; font-weight: bold; }
+      .offline { color: gray; }
+    </style>
+  </head>
+  <body>
+    <h1>TikTok Recorder — Status</h1>
+    <p><a href="/authorize">Authorize Google Drive</a> (If you haven't)</p>
+    <table>
+      <thead>
+        <tr><th>User</th><th>Online</th><th>Recording</th><th>Live duration (s)</th><th>Last online</th><th>Recording file</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td><a href="https://www.tiktok.com/@{{ r.username }}" target="_blank">{{ r.username }}</a></td>
+          <td class="{{ 'online' if r.online else 'offline' }}">{{ 'LIVE' if r.online else 'offline' }}</td>
+          <td>{{ 'yes' if r.recording else 'no' }}</td>
+          <td>{{ r.live_duration }}</td>
+          <td>{{ r.last_online }}</td>
+          <td>
+            {% if r.recording_file %}
+              {{ r.recording_file }}
+            {% else %}
+              -
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
 </html>

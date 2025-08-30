@@ -12,7 +12,6 @@ class GoogleDriveUploader:
         self.root_id = self._ensure_folder(self.root_name)
 
     def _ensure_folder(self, folder_name, parent_id=None):
-        # search folder
         q = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         if parent_id:
             q += f" and '{parent_id}' in parents"
@@ -20,11 +19,7 @@ class GoogleDriveUploader:
         files = res.get("files", [])
         if files:
             return files[0]["id"]
-        # create
-        metadata = {
-            "name": folder_name,
-            "mimeType": "application/vnd.google-apps.folder"
-        }
+        metadata = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
         if parent_id:
             metadata["parents"] = [parent_id]
         file = self.service.files().create(body=metadata, fields="id").execute()
@@ -35,7 +30,12 @@ class GoogleDriveUploader:
             raise FileNotFoundError(local_path)
         folder_id = self.root_id
         if remote_subfolder:
-            folder_id = self._ensure_folder(remote_subfolder, parent_id=self.root_id)
+            # remote_subfolder can be "username/YYYY-MM-DD" — create nested folders
+            parts = str(remote_subfolder).strip("/").split("/")
+            parent = self.root_id
+            for p in parts:
+                parent = self._ensure_folder(p, parent_id=parent)
+            folder_id = parent
         file_metadata = {"name": os.path.basename(local_path), "parents": [folder_id]}
         media = MediaFileUpload(local_path, resumable=True)
         request = self.service.files().create(body=file_metadata, media_body=media, fields="id")
