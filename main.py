@@ -140,20 +140,22 @@ def oauth2callback():
 
 @app.route("/status")
 def status():
-    # existing logic that builds data list (rows)
+    # ✅ FIXED: use `status_tracker` not `STATUS_TRACKER`
     data = []
-    for username, info in STATUS_TRACKER.items():
+    for username, info in status_tracker.items():
         data.append({
             "username": username,
             "last_online": info.get("last_online", "N/A"),
             "live_duration": info.get("live_duration", 0),
             "online": info.get("online", False),
             "recording_duration": info.get("recording_duration", 0),
+            "recording": info.get("recording", False),
         })
 
     # ✅ Pass Google Drive connection status
     drive_connected = os.path.exists("token.json")
 
     return render_template("status.html", rows=data, drive_connected=drive_connected)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
