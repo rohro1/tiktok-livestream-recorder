@@ -1,51 +1,36 @@
-<!-- templates/status.html -->
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>TikTok Livestream Recorder Status</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body { font-family: Arial, sans-serif; padding: 24px; }
-    table { border-collapse: collapse; width: 100%; max-width: 1000px; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-    th { background: #f4f4f4; }
-    .online { color: green; font-weight: bold; }
-    .offline { color: #777; }
-    .recording { color: red; font-weight: bold; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Status Page</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.1.3/css/bootstrap.min.css">
 </head>
 <body>
-  <h1>Livestream Status</h1>
-  <table>
-    <thead>
-      <tr>
-        <th>Username</th>
-        <th>Last Online (UTC)</th>
-        <th>Live Duration (s)</th>
-        <th>Online</th>
-        <th>Recording Status</th>
-        <th>Recording File</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td>{{ r.username }}</td>
-        <td>{{ r.last_online }}</td>
-        <td>{{ r.live_duration }}</td>
-        <td class="{{ 'online' if r.online else 'offline' }}">{{ 'Online' if r.online else 'Offline' }}</td>
-        <td class="{{ 'recording' if r.recording else '' }}">{{ 'Recording' if r.recording else 'Not Recording' }}</td>
-        <td>
-          {% if r.recording_file %}
-            <a href="/{{ r.recording_file }}" target="_blank">{{ r.recording_file }}</a>
-          {% else %}
-            -
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+    <div class="container mt-5">
+        <h1>TikTok Livestream Recorder Status</h1>
+        <table class="table table-bordered">
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Online</th>
+                    <th>Recording</th>
+                    <th>Live Duration</th>
+                    <th>Last Online</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>{{ row.username }}</td>
+                    <td>{{ 'Yes' if row.online else 'No' }}</td>
+                    <td>{{ 'Yes' if row.recording else 'No' }}</td>
+                    <td>{{ row.live_duration if row.live_duration > 0 else 'N/A' }}</td>
+                    <td>{{ row.last_online }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </body>
 </html>
