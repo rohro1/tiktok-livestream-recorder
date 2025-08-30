@@ -1,7 +1,8 @@
-Flask>=2.2
-google-auth>=2.22
-google-auth-oauthlib>=1.0
-google-api-python-client>=2.100
-yt-dlp>=2024.7.0
-ffmpeg-python>=0.2.0
-gunicorn>=20.1
+yt-dlp
+ffmpeg-python
+Flask
+gunicorn
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
