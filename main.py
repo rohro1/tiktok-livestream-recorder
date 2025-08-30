@@ -68,7 +68,7 @@ def poll_loop():
                     logger.error("Error checking live status for %s: %s", username, e)
 
                 if is_live:
-                    # always update online=True when live
+                    # Always update online=True when live
                     status_tracker.update_status(username, online=True)
                     if username not in recorders or not recorders[username].is_running():
                         recorder = TikTokLiveRecorder(api, resolution="480p")
@@ -77,12 +77,14 @@ def poll_loop():
                         if ok:
                             recorders[username] = recorder
                             status_tracker.set_recording_file(username, out_path)
-                            # fix: mark recording True only after recorder starts
+                            # Mark recording True only after recorder starts
                             status_tracker.update_status(username, recording=True)
                         else:
                             status_tracker.update_status(username, recording=False)
+                    # Update live duration correctly
+                    status_tracker.update_status(username, live_duration=0)  # Ensure it starts fresh when online
                 else:
-                    # offline
+                    # Offline
                     status_tracker.update_status(username, online=False, recording=False)
                     rec = recorders.get(username)
                     if rec and rec.is_running():
