@@ -8,9 +8,10 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
+# Import from correct location: Ensure this path aligns with your project structure.
 from src.utils.oauth_drive import create_auth_url, fetch_and_store_credentials, get_drive_service, TOKEN_PATH
 from src.utils.status_tracker import StatusTracker
-from src.core.tiktok_api import TikTokAPI
+from src.core.tiktok_api import TikTokAPI  # Ensure correct path
 from src.core.tiktok_recorder import TikTokLiveRecorder
 from src.utils.folder_manager import make_user_folders
 from src.utils.google_drive_uploader import GoogleDriveUploader
@@ -60,6 +61,7 @@ def poll_loop():
     while True:
         for username in usernames:
             try:
+                # Ensure TikTokAPI is initialized properly (updated)
                 api = TikTokAPI(username)
                 is_live = False
                 try:
