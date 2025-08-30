@@ -134,13 +134,19 @@ def status():
     rows = []
     for username in usernames:
         info = status_tracker.get_status(username)
+        # Ensure that live_duration is updated correctly before displaying
+        last_online = info.get("last_online", "N/A")
+        live_duration = info.get("live_duration", 0)
+        online = info.get("online", False)
+        recording = info.get("recording", False)
+        recording_file = info.get("recording_file")
         rows.append({
             "username": username,
-            "last_online": info.get("last_online", "N/A"),
-            "live_duration": info.get("live_duration", 0),
-            "online": info.get("online", False),
-            "recording": info.get("recording", False),
-            "recording_file": info.get("recording_file")
+            "last_online": last_online if last_online != "N/A" else "N/A",
+            "live_duration": live_duration,
+            "online": "Online" if online else "Offline",
+            "recording": "Recording" if recording else "Not Recording",
+            "recording_file": recording_file if recording_file else "-"
         })
     return render_template("status.html", rows=rows)
 
