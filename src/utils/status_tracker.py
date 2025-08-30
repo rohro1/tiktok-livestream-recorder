@@ -16,6 +16,7 @@ class StatusTracker:
                     "live_duration": 0,
                     "recording": False,
                     "recording_file": None,
+                    "recording_duration": 0
                 }
             return self._map[username]
 
@@ -24,7 +25,7 @@ class StatusTracker:
             self._ensure(username)
             return dict(self._map[username])
 
-    def update_status(self, username, online=None, live_duration=None, recording=None):
+    def update_status(self, username, online=None, live_duration=None, recording=None, recording_duration=None):
         with self._lock:
             st = self._ensure(username)
             now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -36,6 +37,8 @@ class StatusTracker:
                 st["live_duration"] = live_duration
             if recording is not None:
                 st["recording"] = recording
+            if recording_duration is not None:
+                st["recording_duration"] = recording_duration
 
     def set_recording_file(self, username, path):
         with self._lock:
@@ -47,7 +50,7 @@ class StatusTracker:
             st = self._ensure(username)
             return st.get("recording_file")
 
-    # ✅ Minimal patch: provide get_all()
     def get_all(self):
+        """Return a copy of all usernames and their info"""
         with self._lock:
             return {u: dict(info) for u, info in self._map.items()}

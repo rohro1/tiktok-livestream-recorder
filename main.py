@@ -96,9 +96,8 @@ def poll_loop():
                 logger.exception("Error while polling %s", username)
         sleep(POLL_INTERVAL)
 
-if __name__ == "__main__" or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-    poll_thread = Thread(target=poll_loop, daemon=True)
-    poll_thread.start()
+poll_thread = Thread(target=poll_loop, daemon=True)
+poll_thread.start()
 
 @app.route("/")
 def index():
@@ -127,7 +126,7 @@ def status():
         return redirect(url_for("authorize"))
 
     table_data = []
-    # ✅ FIX: use get_all() instead of accessing .data
+    # ✅ Use get_all() so all tracked usernames show up
     for username, info in status_tracker.get_all().items():
         table_data.append({
             "username": username,
