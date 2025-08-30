@@ -140,10 +140,11 @@ def oauth2callback():
 
 @app.route("/status")
 def status():
-    if not session.get("authorized"):
+    # ✅ FIX: instead of using session, check if token.json exists
+    if not os.path.exists(TOKEN_PATH):
         return redirect(url_for("authorize"))
 
-    # FIX: use status_tracker.data instead of status_tracker directly
+    # build table data from tracker
     table_data = []
     for username, info in status_tracker.data.items():
         table_data.append({
