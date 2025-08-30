@@ -16,14 +16,14 @@ class StatusTracker:
                     "live_duration": 0,
                     "recording": False,
                     "recording_file": None,
-                    "recording_duration": 0
+                    "recording_duration": 0,
                 }
             return self._map[username]
 
     def get_status(self, username):
         with self._lock:
-            self._ensure(username)
-            return dict(self._map[username])
+            st = self._ensure(username)
+            return dict(st)
 
     def update_status(self, username, online=None, live_duration=None, recording=None, recording_duration=None):
         with self._lock:
@@ -50,7 +50,7 @@ class StatusTracker:
             st = self._ensure(username)
             return st.get("recording_file")
 
+    # ✅ NEW: return all usernames and their info
     def get_all(self):
-        """Return a copy of all usernames and their info"""
         with self._lock:
             return {u: dict(info) for u, info in self._map.items()}
