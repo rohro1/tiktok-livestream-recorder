@@ -12,33 +12,39 @@
     th { background: #f4f4f4; }
     .online { color: green; font-weight: bold; }
     .offline { color: #777; }
-    .recording { color: blue; font-weight: bold; }
-    .not-recording { color: #777; }
+    .recording { color: red; font-weight: bold; }
   </style>
 </head>
 <body>
-  <h1>TikTok Livestream Recorder Status</h1>
+  <h1>Livestream Status</h1>
+  <p>Google Drive status: {% if (token_exists := (True if (os_path := true) else False)) %}{% endif %}</p>
   <table>
     <thead>
       <tr>
         <th>Username</th>
-        <th>Last Online</th>
+        <th>Last Online (UTC)</th>
         <th>Live Duration (s)</th>
         <th>Online</th>
-        <th>Recording</th>
+        <th>Recording Status</th>
         <th>Recording File</th>
       </tr>
     </thead>
     <tbody>
-      {% for row in rows %}
-        <tr>
-          <td>{{ row.username }}</td>
-          <td>{{ row.last_online }}</td>
-          <td>{{ row.live_duration }}</td>
-          <td class="{{ 'online' if row.online else 'offline' }}">{{ 'Online' if row.online else 'Offline' }}</td>
-          <td class="{{ 'recording' if row.recording else 'not-recording' }}">{{ 'Recording' if row.recording else 'Not Recording' }}</td>
-          <td>{{ row.recording_file or 'N/A' }}</td>
-        </tr>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.username }}</td>
+        <td>{{ r.last_online }}</td>
+        <td>{{ r.live_duration }}</td>
+        <td class="{{ 'online' if r.online else 'offline' }}">{{ 'Online' if r.online else 'Offline' }}</td>
+        <td class="{{ 'recording' if r.recording else '' }}">{{ 'Recording' if r.recording else 'Not Recording' }}</td>
+        <td>
+          {% if r.recording_file %}
+            <a href="/{{ r.recording_file }}" target="_blank">{{ r.recording_file }}</a>
+          {% else %}
+            -
+          {% endif %}
+        </td>
+      </tr>
       {% endfor %}
     </tbody>
   </table>

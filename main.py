@@ -68,8 +68,8 @@ def poll_loop():
                 except Exception as e:
                     logger.error("Error checking live status for %s: %s", username, e)
 
+                # User is live, handle accordingly
                 if is_live:
-                    # Always update online=True when live
                     status_tracker.update_status(username, online=True)
 
                     if username not in recorders or not recorders[username].is_running():
@@ -79,7 +79,6 @@ def poll_loop():
                         if ok:
                             recorders[username] = recorder
                             status_tracker.set_recording_file(username, out_path)
-                            # Mark recording True only after recorder starts
                             status_tracker.update_status(username, recording=True)
                         else:
                             status_tracker.update_status(username, recording=False)
