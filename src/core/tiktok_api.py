@@ -1,46 +1,28 @@
 # src/core/tiktok_api.py
 import subprocess
-import json
 import logging
+import shutil
 
 logger = logging.getLogger("TikTokAPI")
-logger.setLevel(logging.INFO)
 
 class TikTokAPI:
-    """
-    Minimal wrapper to check if a TikTok user is live using yt-dlp.
-    """
     def __init__(self, username):
         self.username = username
-        self.stream_url = None
+        # Detect yt-dlp path
+        self.yt_dlp_path = shutil.which("yt-dlp")
+        if not self.yt_dlp_path:
+            logger.error("yt-dlp not found in PATH. Install it or check your environment.")
 
     def is_live(self):
-        """
-        Returns True if the user is currently live.
-        """
-        try:
-            # yt-dlp command to get live info
-            cmd = [
-                "yt-dlp",
-                f"https://www.tiktok.com/@{self.username}",
-                "--dump-json",
-                "--skip-download"
-            ]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            if proc.returncode != 0:
-                logger.warning("yt-dlp failed for %s: %s", self.username, proc.stderr)
-                return False
-            data = json.loads(proc.stdout)
-            is_live = data.get("is_live", False)
-            if is_live:
-                self.stream_url = data.get("url")
-            else:
-                self.stream_url = None
-            return is_live
-        except Exception:
-            logger.exception("Failed to check live status for %s", self.username)
-            self.stream_url = None
+        if not self.yt_dlp_path:
             return False
-
-    def get_stream_url(self):
-        return self.stream_url
+        cmd = [self.yt_dlp_path, f"https://www.tiktok.com/@{self.username}", "--dump-json"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            output = proc.stdout
+            if '"is_live":true' in output:
+                return True
+            return False
+        except Exception as e:
+            logger.error("Failed to check live status for %s: %s", self.username, e)
+            return False

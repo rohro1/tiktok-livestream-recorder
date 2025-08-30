@@ -5,7 +5,7 @@ from datetime import datetime
 class StatusTracker:
     def __init__(self):
         self._lock = threading.RLock()
-        self._map = {}  # username -> info dict
+        self._map = {}
 
     def _ensure(self, username):
         with self._lock:
@@ -16,29 +16,28 @@ class StatusTracker:
                     "live_duration": 0,
                     "recording": False,
                     "recording_file": None,
-                    "recording_duration": 0,
                 }
             return self._map[username]
 
     def get_status(self, username):
         with self._lock:
-            st = self._ensure(username)
-            return dict(st)
+            self._ensure(username)
+            return dict(self._map[username])
 
-    def update_status(self, username, online=None, live_duration=None, recording=None, recording_duration=None):
+    def update_status(self, username, online=None, live_duration=None, recording=None):
         with self._lock:
             st = self._ensure(username)
             now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             if online is not None:
-                st["online"] = online
                 if online:
+                    st["online"] = True
                     st["last_online"] = now
+                else:
+                    st["online"] = False
             if live_duration is not None:
                 st["live_duration"] = live_duration
             if recording is not None:
                 st["recording"] = recording
-            if recording_duration is not None:
-                st["recording_duration"] = recording_duration
 
     def set_recording_file(self, username, path):
         with self._lock:
@@ -50,7 +49,7 @@ class StatusTracker:
             st = self._ensure(username)
             return st.get("recording_file")
 
+    # <<< ADD THIS METHOD >>>
     def get_all(self):
-        """Return copy of all username info for /status page"""
         with self._lock:
             return {user: dict(info) for user, info in self._map.items()}
