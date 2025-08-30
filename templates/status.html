@@ -1,36 +1,15 @@
 <!-- templates/status.html -->
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>TikTok Livestream Recorder Status</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body { font-family: Arial, sans-serif; padding: 24px; }
-    table { border-collapse: collapse; width: 100%; max-width: 1000px; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-    th { background: #f4f4f4; }
-    .online { color: green; font-weight: bold; }
-    .offline { color: #777; }
-    .recording { color: red; font-weight: bold; }
-  </style>
-</head>
+<html>
+<head><meta charset="utf-8"><title>TikTok Livestream Recorder Status</title></head>
 <body>
   <h1>Livestream Status</h1>
-<p>Google Drive status: 
-    {% set token_exists = true if os_path == true else false %}
-    {% if token_exists %}
-        Available
-    {% else %}
-        Not Available
-    {% endif %}
-</p>
-  <table>
+  <table border="1">
     <thead>
       <tr>
         <th>Username</th>
-        <th>Last Online (UTC)</th>
-        <th>Live Duration (s)</th>
+        <th>Last Online</th>
+        <th>Live Duration</th>
         <th>Online</th>
         <th>Recording Status</th>
         <th>Recording File</th>
@@ -42,15 +21,9 @@
         <td>{{ r.username }}</td>
         <td>{{ r.last_online }}</td>
         <td>{{ r.live_duration }}</td>
-        <td class="{{ 'online' if r.online else 'offline' }}">{{ 'Online' if r.online else 'Offline' }}</td>
-        <td class="{{ 'recording' if r.recording else '' }}">{{ 'Recording' if r.recording else 'Not Recording' }}</td>
-        <td>
-          {% if r.recording_file %}
-            <a href="/{{ r.recording_file }}" target="_blank">{{ r.recording_file }}</a>
-          {% else %}
-            -
-          {% endif %}
-        </td>
+        <td>{{ r.online }}</td>
+        <td>{{ r.recording }}</td>
+        <td>{{ r.recording_file }}</td>
       </tr>
       {% endfor %}
     </tbody>

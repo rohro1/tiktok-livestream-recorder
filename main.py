@@ -69,9 +69,11 @@ def poll_loop():
 
                 # User is live, handle accordingly
                 if is_live:
+                    # Set the user to online only if they were previously offline
                     status_tracker.update_status(username, online=True)
 
                     if username not in recorders or not recorders[username].is_running():
+                        # Start recording if not already running
                         recorder = TikTokLiveRecorder(api, resolution="480p")
                         out_path = recording_output_path(username)
                         ok = recorder.start_recording(out_path)
@@ -140,13 +142,18 @@ def status():
         online = info.get("online", False)
         recording = info.get("recording", False)
         recording_file = info.get("recording_file")
+        
+        # Show more explicit details for recording
+        recording_status = "Recording" if recording else "Not Recording"
+        recording_file_status = f'<a href="/{recording_file}" target="_blank">{recording_file}</a>' if recording_file else "-"
+
         rows.append({
             "username": username,
             "last_online": last_online if last_online != "N/A" else "N/A",
             "live_duration": live_duration,
             "online": "Online" if online else "Offline",
-            "recording": "Recording" if recording else "Not Recording",
-            "recording_file": recording_file if recording_file else "-"
+            "recording": recording_status,
+            "recording_file": recording_file_status
         })
     return render_template("status.html", rows=rows)
 
