@@ -20,7 +20,7 @@ from src.utils.google_drive_uploader import GoogleDriveUploader
 # Config
 PORT = int(os.environ.get("PORT", 10000))
 OAUTH_CREDENTIALS_FILE = os.environ.get("OAUTH_CREDENTIALS_FILE", "credentials.json")
-OAUTH_REDIRECT = os.environ.get("OAUTH_REDIRECT", None)  # e.g. https://yourdomain.com/oauth2callback
+OAUTH_REDIRECT = os.environ.get("OAUTH_REDIRECT", None)
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 USERNAMES_FILE = os.environ.get("USERNAMES_FILE", "usernames.txt")
 RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "recordings")
@@ -28,10 +28,8 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "12"))
 
 app = Flask(__name__, template_folder="templates")
 
-# ensure recordings dir exists
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
-# read usernames
 def read_usernames(path):
     out = []
     try:
@@ -46,25 +44,19 @@ def read_usernames(path):
 
 usernames = read_usernames(USERNAMES_FILE)
 
-# Status tracker and recorder management
 status_tracker = StatusTracker()
-recorders = {}  # username -> TikTokLiveRecorder
-uploaders = {}  # username -> GoogleDriveUploader (when needed)
+recorders = {}
+uploaders = {}
 
-# helper to build output path
 def recording_output_path(username):
     os.makedirs(os.path.join(RECORDINGS_DIR, username), exist_ok=True)
-    # timestamped filename
     from datetime import datetime
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     return os.path.join(RECORDINGS_DIR, username, f"{username}_{ts}.mp4")
 
-# background worker that polls each user and updates status_tracker + recorder
 def poll_loop():
     logger.info("Starting poll loop (interval=%s)", POLL_INTERVAL)
-    # initialize folder structure
     make_user_folders(usernames, RECORDINGS_DIR)
-    # create uploaders if drive configured
     drive_service = get_drive_service()
     if drive_service:
         for u in usernames:
@@ -74,11 +66,8 @@ def poll_loop():
             try:
                 api = TikTokAPI(username)
                 is_live = api.is_live()
-                prev = status_tracker.get_status(username)
                 if is_live:
-                    # update status_tracker
                     status_tracker.update_status(username, online=True)
-                    # start recorder if not running
                     if username not in recorders or not recorders[username].is_running():
                         recorder = TikTokLiveRecorder(api, resolution="480p")
                         out_path = recording_output_path(username)
@@ -91,12 +80,10 @@ def poll_loop():
                             logger.info("Failed to start recording for %s", username)
                             status_tracker.update_status(username, recording=False)
                 else:
-                    # offline: stop recorder (if running)
                     status_tracker.update_status(username, online=False)
                     rec = recorders.get(username)
                     if rec and rec.is_running():
                         rec.stop_recording()
-                        # queue upload if available
                         out_file = status_tracker.get_recording_file(username)
                         if out_file and os.path.exists(out_file) and username in uploaders:
                             try:
@@ -109,51 +96,45 @@ def poll_loop():
                 logger.exception("Error while polling %s", username)
         sleep(POLL_INTERVAL)
 
-# start poll thread
 poll_thread = Thread(target=poll_loop, daemon=True)
 poll_thread.start()
 
 @app.route("/")
 def index():
-    # redirect to status (status shows authorize status too)
     return redirect(url_for("status"))
 
 @app.route("/authorize")
 def authorize():
-    # create auth url and redirect user to Google
     redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
     auth_url = create_auth_url(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri)
     return render_template("authorize.html", auth_url=auth_url)
 
 @app.route("/oauth2callback")
 def oauth2callback():
-    # Google will redirect here with `?code=...`
     redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
-    full_url = request.url  # includes code & state
+    full_url = request.url
     creds = fetch_and_store_credentials(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri, full_url)
     if creds:
         logger.info("OAuth success — credentials saved to %s", TOKEN_PATH)
     else:
         logger.warning("OAuth callback did not produce credentials")
-    # After successful auth, go to status page
     return redirect(url_for("status"))
 
 @app.route("/status")
 def status():
-    # ✅ FIX: instead of using session, check if token.json exists
     if not os.path.exists(TOKEN_PATH):
         return redirect(url_for("authorize"))
 
-    # build table data from tracker
     table_data = []
-    for username, info in status_tracker.data.items():
+    # ✅ FIX: use get_all() instead of accessing .data
+    for username, info in status_tracker.get_all().items():
         table_data.append({
             "username": username,
             "last_online": info.get("last_online", "N/A"),
             "live_duration": info.get("live_duration", 0),
             "online": info.get("online", False),
             "recording_duration": info.get("recording_duration", 0),
-            "recording_status": "Recording" if info.get("online", False) else "Not Recording"
+            "recording_status": "Recording" if info.get("recording", False) else "Not Recording"
         })
 
     return render_template("status.html", streams=table_data)
