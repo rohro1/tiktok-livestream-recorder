@@ -3,51 +3,60 @@ import logging
 import requests
 
 logger = logging.getLogger("tiktok_api")
+logger.setLevel(logging.INFO)
 
 class TikTokAPI:
     """
-    Wrapper for TikTok live API.
-    Provides methods to check if a user is live and get their livestream URL.
+    Handles checking if a TikTok username is live and getting the stream URL.
     """
 
-    BASE_URL = "https://www.tiktok.com/api/live/detail/"
-
-    def __init__(self, username: str):
+    def __init__(self, username):
         self.username = username
+        self.user_id = None
+        self.live_url = None
 
-    def is_live(self) -> bool:
+    def get_user_info(self):
         """
-        Check if the TikTok user is live.
-        Returns True/False.
+        Fetch user info from TikTok API to get user_id
         """
         try:
+            resp = requests.get(f"https://www.tiktok.com/@{self.username}", timeout=10)
+            if resp.status_code == 200:
+                # TikTok returns HTML; parse userId from initial state
+                import re, json
+                match = re.search(r'window\.__INIT_PROPS__\s*=\s*({.*?});', resp.text)
+                if match:
+                    data = json.loads(match.group(1))
+                    self.user_id = data.get("userData", {}).get("user", {}).get("id")
+            return self.user_id
+        except Exception:
+            logger.debug(f"Failed to fetch user info for {self.username}", exc_info=True)
+            return None
+
+    def is_live(self):
+        """
+        Returns True if user is live, False otherwise
+        """
+        try:
+            from yt_dlp.utils import DownloadError
+            import yt_dlp
             url = f"https://www.tiktok.com/@{self.username}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            }
-            r = requests.get(url, headers=headers, timeout=10)
-            if "LIVE" in r.text or "liveRoomId" in r.text:
-                return True
-        except Exception as e:
-            logger.error("Failed to check live status for %s: %s", self.username, e)
-        return False
+            ydl_opts = {"quiet": True, "skip_download": True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                live_status = info.get("is_live") or False
+                if live_status:
+                    self.live_url = info.get("url")
+                    return True
+                else:
+                    self.live_url = None
+                    return False
+        except Exception:
+            self.live_url = None
+            return False
 
-    def get_live_url(self) -> str | None:
+    def get_live_url(self):
         """
-        Return the m3u8 playlist URL of the livestream (480p if available).
+        Returns live stream URL or None
         """
-        try:
-            url = f"https://www.tiktok.com/@{self.username}/live"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            }
-            r = requests.get(url, headers=headers, timeout=10)
-            if ".m3u8" in r.text:
-                # crude extract of first playlist link
-                start = r.text.find("https://")
-                end = r.text.find(".m3u8", start)
-                if start != -1 and end != -1:
-                    return r.text[start:end+5]
-        except Exception as e:
-            logger.error("Failed to fetch live URL for %s: %s", self.username, e)
-        return None
+        return self.live_url
