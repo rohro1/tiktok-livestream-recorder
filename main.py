@@ -3,12 +3,13 @@ import logging
 from flask import Flask, redirect, render_template, request, url_for
 from threading import Thread
 from time import sleep
+from datetime import datetime
 
-# app logging
+# App logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
-# import utils from src/utils
+# Import utils from src/utils
 from src.utils.oauth_drive import create_auth_url, fetch_and_store_credentials, get_drive_service, TOKEN_PATH
 from src.utils.status_tracker import StatusTracker
 from src.core.tiktok_api import TikTokAPI
@@ -27,10 +28,10 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "12"))
 
 app = Flask(__name__, template_folder="templates")
 
-# ensure recordings dir exists
+# Ensure recordings dir exists
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
-# read usernames
+# Read usernames
 def read_usernames(path):
     out = []
     try:
@@ -40,7 +41,7 @@ def read_usernames(path):
                 if u:
                     out.append(u)
     except FileNotFoundError:
-        logger.warning("usernames file not found: %s", path)
+        logger.warning("Usernames file not found: %s", path)
     return out
 
 usernames = read_usernames(USERNAMES_FILE)
@@ -50,24 +51,24 @@ status_tracker = StatusTracker()
 recorders = {}  # username -> TikTokLiveRecorder
 uploaders = {}  # username -> GoogleDriveUploader (when needed)
 
-# helper to build output path
+# Helper to build output path
 def recording_output_path(username):
     os.makedirs(os.path.join(RECORDINGS_DIR, username), exist_ok=True)
-    # timestamped filename
-    from datetime import datetime
+    # Timestamped filename
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     return os.path.join(RECORDINGS_DIR, username, f"{username}_{ts}.mp4")
 
-# background worker that polls each user and updates status_tracker + recorder
+# Background worker that polls each user and updates status_tracker + recorder
 def poll_loop():
     logger.info("Starting poll loop (interval=%s)", POLL_INTERVAL)
-    # initialize folder structure
+    # Initialize folder structure
     make_user_folders(usernames, RECORDINGS_DIR)
-    # create uploaders if drive configured
+    # Create uploaders if drive configured
     drive_service = get_drive_service()
     if drive_service:
         for u in usernames:
             uploaders[u] = GoogleDriveUploader(drive_service, drive_folder_root="TikTokRecordings")
+    
     while True:
         for username in usernames:
             try:
@@ -75,9 +76,9 @@ def poll_loop():
                 is_live = api.is_live()
                 prev = status_tracker.get_status(username)
                 if is_live:
-                    # update status_tracker
+                    # Update status_tracker
                     status_tracker.update_status(username, online=True)
-                    # start recorder if not running
+                    # Start recorder if not running
                     if username not in recorders or not recorders[username].is_running():
                         recorder = TikTokLiveRecorder(api, resolution="480p")
                         out_path = recording_output_path(username)
@@ -90,12 +91,12 @@ def poll_loop():
                             logger.info("Failed to start recording for %s", username)
                             status_tracker.update_status(username, recording=False)
                 else:
-                    # offline: stop recorder (if running)
+                    # Offline: stop recorder (if running)
                     status_tracker.update_status(username, online=False)
                     rec = recorders.get(username)
                     if rec and rec.is_running():
                         rec.stop_recording()
-                        # queue upload if available
+                        # Queue upload if available
                         out_file = status_tracker.get_recording_file(username)
                         if out_file and os.path.exists(out_file) and username in uploaders:
                             try:
@@ -104,22 +105,22 @@ def poll_loop():
                                 logger.exception("Upload failed for %s: %s", username, e)
                         status_tracker.set_recording_file(username, None)
                         status_tracker.update_status(username, recording=False)
-            except Exception:
-                logger.exception("Error while polling %s", username)
+            except Exception as e:
+                logger.exception("Error while polling %s: %s", username, e)
         sleep(POLL_INTERVAL)
 
-# start poll thread
+# Start poll thread
 poll_thread = Thread(target=poll_loop, daemon=True)
 poll_thread.start()
 
 @app.route("/")
 def index():
-    # redirect to status (status shows authorize status too)
+    # Redirect to status (status shows authorize status too)
     return redirect(url_for("status"))
 
 @app.route("/authorize")
 def authorize():
-    # create auth url and redirect user to Google
+    # Create auth URL and redirect user to Google
     redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
     auth_url = create_auth_url(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri)
     return render_template("authorize.html", auth_url=auth_url)
@@ -151,7 +152,7 @@ def status():
             "recording": st.get("recording", False),
             "recording_file": st.get("recording_file", None),
         })
-    # If request wants json, return raw
+    # If request wants JSON, return raw
     if request.args.get("json") == "1":
         from flask import jsonify
         return jsonify({item["username"]: item for item in data})
