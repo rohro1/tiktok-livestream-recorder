@@ -93,7 +93,7 @@ def poll_loop():
                         status_tracker.update_status(username, last_online=datetime.utcnow())
                 
                 else:
-                    # Offline
+                    # Offline: stop recorder if needed
                     status_tracker.update_status(username, online=False, recording=False)
                     rec = recorders.get(username)
                     if rec and rec.is_running():
