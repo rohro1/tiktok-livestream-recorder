@@ -1,52 +1,37 @@
-<!-- templates/status.html -->
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>TikTok Livestream Recorder Status</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body { font-family: Arial, sans-serif; padding: 24px; }
-    table { border-collapse: collapse; width: 100%; max-width: 1000px; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-    th { background: #f4f4f4; }
-    .online { color: green; font-weight: bold; }
-    .offline { color: #777; }
-    .recording { color: red; font-weight: bold; }
-  </style>
+    <meta charset="UTF-8">
+    <title>TikTok Live Status</title>
+    <style>
+        table { border-collapse: collapse; width: 80%; margin: auto; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+        th { background: #eee; }
+        .online { color: green; font-weight: bold; }
+        .offline { color: red; font-weight: bold; }
+    </style>
 </head>
 <body>
-  <h1>Livestream Status</h1>
-  <p>Google Drive status: {% if (token_exists := (True if (os_path := true) else False)) %}{% endif %}</p>
-  <table>
-    <thead>
-      <tr>
+<h2 style="text-align:center;">TikTok Live Status</h2>
+<table>
+    <tr>
         <th>Username</th>
-        <th>Last Online (UTC)</th>
-        <th>Live Duration (s)</th>
         <th>Online</th>
-        <th>Recording Status</th>
+        <th>Recording</th>
+        <th>Last Online</th>
+        <th>Live Duration (s)</th>
         <th>Recording File</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td>{{ r.username }}</td>
-        <td>{{ r.last_online }}</td>
-        <td>{{ r.live_duration }}</td>
-        <td class="{{ 'online' if r.online else 'offline' }}">{{ 'Online' if r.online else 'Offline' }}</td>
-        <td class="{{ 'recording' if r.recording else '' }}">{{ 'Recording' if r.recording else 'Not Recording' }}</td>
-        <td>
-          {% if r.recording_file %}
-            <a href="/{{ r.recording_file }}" target="_blank">{{ r.recording_file }}</a>
-          {% else %}
-            -
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+    </tr>
+    {% for row in rows %}
+    <tr>
+        <td>{{ row.username }}</td>
+        <td class="{{ 'online' if row.online else 'offline' }}">{{ 'Online' if row.online else 'Offline' }}</td>
+        <td>{{ 'Recording' if row.recording else 'Not Recording' }}</td>
+        <td>{{ row.last_online }}</td>
+        <td>{{ row.live_duration }}</td>
+        <td>{% if row.recording_file %}{{ row.recording_file }}{% else %}-{% endif %}</td>
+    </tr>
+    {% endfor %}
+</table>
 </body>
 </html>
