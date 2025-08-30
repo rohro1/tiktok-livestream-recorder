@@ -1,5 +1,6 @@
+# src/utils/folder_manager.py
 import os
 
-def make_user_folders(usernames, base_dir):
+def make_user_folders(usernames, recordings_dir):
     for u in usernames:
-        os.makedirs(os.path.join(base_dir, u), exist_ok=True)
+        os.makedirs(os.path.join(recordings_dir, u), exist_ok=True)

@@ -1,0 +1,36 @@
+.
+├── .github
+│   └── workflows
+│       └── auto_commit.yml
+├── .gitignore
+├── Build
+├── auto_commit.py
+├── main.py
+├── project_tree.tx
+├── recorder_worker.py
+├── requirements.txt
+├── sample.mp4
+├── setup_project.sh
+├── src
+│   ├── __init__.py
+│   ├── core
+│   │   ├── __init__.py
+│   │   ├── recorder.py
+│   │   ├── tiktok_api.py
+│   │   └── tiktok_recorder.py
+│   └── utils
+│       ├── __init__.py
+│       ├── folder_manager.py
+│       ├── google_drive_uploader.py
+│       ├── oauth_drive.py
+│       └── status_tracker.py
+├── templates
+│   ├── authorize.html
+│   └── status.html
+├── test_upload.py
+├── test_upload.txt
+├── test_video.mp4
+├── update_render.sh
+└── usernames.txt
+
+7 directories, 27 files

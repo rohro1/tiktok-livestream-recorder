@@ -1,34 +1,44 @@
+# src/utils/google_drive_uploader.py
 import os
+import logging
 from googleapiclient.http import MediaFileUpload
 
-class GoogleDriveUploader:
-    def __init__(self, service, drive_folder_root="TikTokRecordings"):
-        self.service = service
-        self.root = drive_folder_root
-        self._ensure_root_folder()
+logger = logging.getLogger("drive_uploader")
 
-    def _ensure_root_folder(self):
-        folders = self.service.files().list(q=f"name='{self.root}' and mimeType='application/vnd.google-apps.folder'",
-                                            spaces='drive').execute()
-        if folders["files"]:
-            self.root_id = folders["files"][0]["id"]
-        else:
-            file_metadata = {"name": self.root, "mimeType": "application/vnd.google-apps.folder"}
-            folder = self.service.files().create(body=file_metadata, fields="id").execute()
-            self.root_id = folder["id"]
+class GoogleDriveUploader:
+    def __init__(self, drive_service, drive_folder_root="TikTokRecordings"):
+        self.service = drive_service
+        self.root_name = drive_folder_root
+        self.root_id = self._ensure_folder(self.root_name)
+
+    def _ensure_folder(self, folder_name, parent_id=None):
+        # search folder
+        q = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        if parent_id:
+            q += f" and '{parent_id}' in parents"
+        res = self.service.files().list(q=q, spaces='drive', fields='files(id, name)').execute()
+        files = res.get("files", [])
+        if files:
+            return files[0]["id"]
+        # create
+        metadata = {
+            "name": folder_name,
+            "mimeType": "application/vnd.google-apps.folder"
+        }
+        if parent_id:
+            metadata["parents"] = [parent_id]
+        file = self.service.files().create(body=metadata, fields="id").execute()
+        return file.get("id")
 
     def upload_file(self, local_path, remote_subfolder=None):
+        if not os.path.exists(local_path):
+            raise FileNotFoundError(local_path)
         folder_id = self.root_id
         if remote_subfolder:
-            # Check if subfolder exists
-            q = f"name='{remote_subfolder}' and mimeType='application/vnd.google-apps.folder' and '{self.root_id}' in parents"
-            folders = self.service.files().list(q=q, spaces='drive').execute()
-            if folders["files"]:
-                folder_id = folders["files"][0]["id"]
-            else:
-                file_metadata = {"name": remote_subfolder, "mimeType": "application/vnd.google-apps.folder", "parents":[self.root_id]}
-                folder = self.service.files().create(body=file_metadata, fields="id").execute()
-                folder_id = folder["id"]
-        file_metadata = {"name": os.path.basename(local_path), "parents":[folder_id]}
+            folder_id = self._ensure_folder(remote_subfolder, parent_id=self.root_id)
+        file_metadata = {"name": os.path.basename(local_path), "parents": [folder_id]}
         media = MediaFileUpload(local_path, resumable=True)
-        self.service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+        request = self.service.files().create(body=file_metadata, media_body=media, fields="id")
+        result = request.execute()
+        logger.info("Uploaded %s -> drive id=%s", local_path, result.get("id"))
+        return result.get("id")
