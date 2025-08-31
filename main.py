@@ -247,8 +247,8 @@ def auth_google():
         logger.error(f"OAuth error: {e}")
         return f"Authorization error: {e}", 500
 
-@app.route('/auth/callback')
-def auth_callback():
+@app.route('/oauth2callback')
+def oauth2callback():
     """Handle Google OAuth callback"""
     try:
         code = request.args.get('code')
@@ -272,11 +272,29 @@ def auth_callback():
         logger.error(f"Callback error: {e}")
         return f"Callback error: {e}", 500
 
-@app.route('/start_monitoring', methods=['POST'])
+@app.route('/test_google_drive')
+def test_google_drive():
+    """Test Google Drive connection"""
+    if not drive_uploader:
+        return "Google Drive not configured", 400
+    
+    try:
+        # Test drive connection
+        drive_uploader.test_connection()
+        return jsonify({'status': 'success', 'message': 'Drive connection successful'})
+    except Exception as e:
+        logger.error(f"Drive test failed: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# Change this to accept both GET and POST for easier frontend interaction
+@app.route('/start_monitoring', methods=['GET', 'POST'])
 def start_monitoring():
     """Start the monitoring system"""
     global monitoring_active
     
+    if request.method == 'GET':
+        return jsonify({'monitoring_active': monitoring_active})
+        
     if not monitoring_active:
         thread = threading.Thread(target=monitoring_loop, daemon=True)
         thread.start()

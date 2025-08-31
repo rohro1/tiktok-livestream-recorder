@@ -61,69 +61,65 @@ class DriveOAuth:
             return None
 
     def _load_credentials_config(self):
-        """Load credentials from file or environment"""
-        if os.environ.get('GOOGLE_CREDENTIALS_JSON'):
-            try:
-                return json.loads(os.environ['GOOGLE_CREDENTIALS_JSON'])
-            except Exception as e:
-                logger.error(f"Failed to parse credentials from environment: {e}")
-                return None
-        
+        """Load credentials from Render secret file"""
         try:
-            with open(self.credentials_file, 'r') as f:
-                return json.load(f)
+            # Check if we're on Render (look for credentials in /etc/secrets)
+            if os.path.exists('/etc/secrets/credentials.json'):
+                with open('/etc/secrets/credentials.json', 'r') as f:
+                    return json.load(f)
+            # Fallback to local file for development
+            elif os.path.exists('credentials.json'):
+                with open('credentials.json', 'r') as f:
+                    return json.load(f)
         except Exception as e:
-            logger.error(f"Failed to load credentials file: {e}")
-            return None
+            logger.error(f"Failed to load credentials: {e}")
+        return None
 
     def get_authorization_url(self):
         """Get OAuth URL with correct redirect"""
-        creds_config = self._load_credentials_config()
-        if not creds_config:
-            raise Exception("No credentials configuration found")
-
-        # Use environment redirect URI if available, fallback to credentials
-        redirect_uri = os.environ.get('OAUTH_REDIRECT_URI')
-        if redirect_uri:
-            creds_config['web']['redirect_uris'] = [redirect_uri]
-            creds_config['web']['redirect_uri'] = redirect_uri
-
-        flow = InstalledAppFlow.from_client_config(
-            creds_config, 
-            self.scopes,
-            redirect_uri=redirect_uri
-        )
-        return flow.authorization_url(prompt='consent')[0]
-
-    def handle_callback(self, authorization_code):
-        """
-        Handle OAuth callback and exchange code for credentials
-        
-        Args:
-            authorization_code (str): Authorization code from callback
-        
-        Returns:
-            Credentials object if successful, None otherwise
-        """
         try:
-            # Restore flow state
-            flow = self._load_flow_state()
-            if not flow:
-                logger.error("No flow state found")
-                return None
+            creds_config = self._load_credentials_config()
+            if not creds_config:
+                raise Exception("No credentials configuration found")
 
-            # Exchange code for credentials
-            flow.fetch_token(code=authorization_code)
-            creds = flow.credentials
-
-            # Save credentials
-            self._save_credentials(creds)
+            flow = InstalledAppFlow.from_client_config(
+                creds_config, 
+                self.scopes,
+                redirect_uri=self.redirect_uri
+            )
             
-            logger.info("OAuth callback successful, credentials saved")
-            return creds
+            auth_url, _ = flow.authorization_url(
+                access_type='offline',
+                include_granted_scopes='true'
+            )
+            
+            return auth_url
             
         except Exception as e:
-            logger.error(f"Error handling OAuth callback: {e}")
+            logger.error(f"Failed to get auth URL: {e}")
+            raise
+
+    def handle_callback(self, code):
+        """Handle OAuth callback with code"""
+        try:
+            creds_config = self._load_credentials_config()
+            if not creds_config:
+                raise Exception("No credentials configuration found")
+                
+            flow = InstalledAppFlow.from_client_config(
+                creds_config,
+                self.scopes
+            )
+            
+            # Use same redirect URI as authorization
+            callback_uri = os.environ.get('OAUTH_REDIRECT_URI', 'http://localhost:8000/auth/callback')
+            flow.redirect_uri = callback_uri
+            
+            flow.fetch_token(code=code)
+            return flow.credentials
+            
+        except Exception as e:
+            logger.error(f"Failed to handle callback: {e}")
             return None
 
     def _save_credentials(self, credentials):
