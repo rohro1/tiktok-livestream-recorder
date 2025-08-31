@@ -1,98 +1,94 @@
 # src/core/tiktok_api.py
-import logging
-import shlex
 import subprocess
 import json
-from typing import Tuple, Optional
+import logging
+import shlex
+import re
 import requests
+from typing import Tuple
 
 logger = logging.getLogger("tiktok_api")
 
-MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
-
 class TikTokAPI:
-    """
-    Multi-strategy TikTok "is live" + stream URL finder:
-      1) Use yt-dlp JSON extraction (best for getting stream URL).
-      2) Probe the mobile web page with a mobile UA to heuristically find "live" indicators.
-      3) Return a boolean and (if found) stream URL.
-    """
     def __init__(self, username: str):
         self.username = username
         self.page_url = f"https://www.tiktok.com/@{username}"
 
-    def _yt_dlp_json(self, url: str) -> Optional[dict]:
+    def _run_ytdlp_json(self, url: str):
+        cmd = ["yt-dlp", "-j", url]
         try:
-            cmd = f"yt-dlp -j {shlex.quote(url)}"
-            p = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=20)
-            if p.returncode != 0 or not p.stdout:
-                logger.debug("yt-dlp returned no JSON or nonzero exit for %s: %s", url, p.stderr.strip())
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+            if p.returncode != 0:
+                logger.debug("yt-dlp returned non-zero: %s", p.stderr.strip())
                 return None
             return json.loads(p.stdout)
         except Exception:
-            logger.exception("yt-dlp JSON extraction failed")
+            logger.exception("yt-dlp probe failed")
             return None
 
-    def _probe_mobile_page(self, url: str) -> Tuple[bool, Optional[str]]:
+    def _check_profile_html_for_live(self) -> Tuple[bool, str]:
+        """
+        Fetch profile HTML and try to find JSON that indicates live status.
+        Returns (is_live, possible_stream_url_or_none)
+        """
         try:
-            headers = {"User-Agent": MOBILE_UA}
-            r = requests.get(url, headers=headers, timeout=12)
-            text = r.text.lower()
-            # heuristics: look for 'is live', 'watch live', "LIVE" or 'is_live'
-            if "is live" in text or "watch live" in text or '"isLiveBroadcast":true' in text or '"is_live":true' in text:
-                # no stream url, but confirms live
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            r = requests.get(self.page_url, headers=headers, timeout=10)
+            text = r.text
+            # look for simple flags
+            if re.search(r'\b"isLive"\s*:\s*true', text) or re.search(r'\b"live"\s*:\s*true', text, re.I):
+                # can't guarantee stream url, but report live
                 return True, None
-            # some pages include 'm3u8' in markup
-            if "m3u8" in text:
-                # try to extract first http...m3u8 occurrences
-                import re
-                m = re.search(r"https?://[^\"]+\.m3u8", text)
-                if m:
-                    return True, m.group(0)
+            # also search for https://...m3u8 occurrences
+            m = re.search(r'(https?://[^\s"\']+\.m3u8[^\s"\']*)', text)
+            if m:
+                return True, m.group(1)
         except Exception:
-            logger.debug("mobile probe failed for %s", url, exc_info=True)
+            logger.exception("HTML check failed")
         return False, None
 
-    def is_live_and_get_stream_url(self) -> Tuple[bool, Optional[str]]:
-        # 1) Try yt-dlp
-        info = self._yt_dlp_json(self.page_url)
+    def is_live_and_get_stream_url(self) -> Tuple[bool, str]:
+        """
+        Multi-step approach:
+         1. Try yt-dlp JSON extraction for the profile — this often contains "is_live" and formats with m3u8.
+         2. If that fails, GET profile HTML and search for indicators (isLive, m3u8 URLs).
+         3. As a last resort, check the @user/live URL or return (True, None) when heuristics indicate live.
+        """
+        # 1) yt-dlp probe
+        info = self._run_ytdlp_json(self.page_url)
         if info:
-            is_live = info.get("is_live") or info.get("live") or False
-            # check formats
+            is_live = bool(info.get("is_live") or info.get("live") or info.get("live_status") == "live")
             formats = info.get("formats") or []
-            # prefer m3u8 or hls formats
-            best_url = None
-            for f in reversed(sorted(formats, key=lambda x: x.get("height") or 0)):
-                proto = (f.get("protocol") or "").lower()
+            # prefer m3u8/hls
+            for f in sorted(formats, key=lambda x: x.get("height") or 0, reverse=True):
+                proto = f.get("protocol", "") or ""
                 ext = (f.get("ext") or "").lower()
                 if "m3u8" in proto or ext == "m3u8" or "hls" in proto:
-                    best_url = f.get("url")
-                    break
-            if not best_url:
-                best_url = info.get("url")
+                    return True, f.get("url")
+            # top-level url
+            if is_live and info.get("url"):
+                return True, info.get("url")
             if is_live:
-                return True, best_url
+                return True, None
 
-        # 2) Mobile web probe heuristics
+        # 2) HTML heuristics
+        is_live_html, url_html = self._check_profile_html_for_live()
+        if is_live_html:
+            return True, url_html
+
+        # 3) check /live endpoint quickly (may redirect)
         try:
-            is_live, url = self._probe_mobile_page(self.page_url)
-            if is_live:
-                return True, url
+            r = requests.head(f"{self.page_url}/live", timeout=8, allow_redirects=True)
+            if r.status_code in (200, 302) and "location" in r.headers:
+                # redirect may point to live page
+                return True, None
+            if r.status_code == 200:
+                # might show live page
+                return True, None
         except Exception:
-            logger.exception("mobile probe exception")
-
-        # 3) fallback: try m.tiktok or /live url
-        fallback_urls = [
-            f"https://m.tiktok.com/v/{self.username}",
-            f"https://www.tiktok.com/@{self.username}/live",
-            self.page_url
-        ]
-        for u in fallback_urls:
-            try:
-                is_live, url = self._probe_mobile_page(u)
-                if is_live:
-                    return True, url
-            except Exception:
-                pass
+            pass
 
         return False, None

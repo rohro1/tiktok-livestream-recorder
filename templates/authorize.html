@@ -3,7 +3,8 @@
   <head><meta charset="utf-8"><title>Authorize</title></head>
   <body>
     <h1>Authorize Google Drive</h1>
-    <p>Click the link below to authorize the app to upload recordings to your Google Drive.</p>
+    <p>Click to authorize the app to upload recordings to your Google Drive.</p>
     <p><a href="{{ auth_url }}" target="_blank">Authorize Google Drive</a></p>
+    <p>After granting permission Google will redirect back to <code>/oauth2callback</code>. That page will show token JSON; copy it and save as a Render secret named <code>TOKEN_JSON</code>. Then restart/redeploy.</p>
   </body>
 </html>

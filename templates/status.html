@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>TikTok Recorder — Status</title>
+    <title>TikTok Recorder Status</title>
     <style>
       body { font-family: Arial, sans-serif; padding: 24px; }
       table { border-collapse: collapse; width: 100%; }
@@ -10,30 +10,27 @@
       th { background: #f7f7f7; }
       .online { color: green; font-weight: bold; }
       .offline { color: gray; }
+      a { color: #0066cc; }
     </style>
   </head>
   <body>
     <h1>TikTok Recorder — Status</h1>
-    <p><a href="/authorize">Authorize Google Drive</a> (If you haven't)</p>
+    <p><a href="/authorize">Authorize Google Drive</a> (only once) — after authorize copy the token JSON into Render secret named <code>TOKEN_JSON</code></p>
     <table>
       <thead>
-        <tr><th>User</th><th>Online</th><th>Recording</th><th>Live duration (s)</th><th>Last online</th><th>Recording file</th></tr>
+        <tr><th>User</th><th>Profile</th><th>Live page</th><th>Online</th><th>Recording</th><th>Live duration (s)</th><th>Last online</th><th>Recording file</th></tr>
       </thead>
       <tbody>
         {% for r in rows %}
         <tr>
-          <td><a href="https://www.tiktok.com/@{{ r.username }}" target="_blank">{{ r.username }}</a></td>
+          <td>{{ r.username }}</td>
+          <td><a href="{{ r.profile_url }}" target="_blank">profile</a></td>
+          <td><a href="{{ r.live_url }}" target="_blank">live page</a></td>
           <td class="{{ 'online' if r.online else 'offline' }}">{{ 'LIVE' if r.online else 'offline' }}</td>
           <td>{{ 'yes' if r.recording else 'no' }}</td>
           <td>{{ r.live_duration }}</td>
           <td>{{ r.last_online }}</td>
-          <td>
-            {% if r.recording_file %}
-              {{ r.recording_file }}
-            {% else %}
-              -
-            {% endif %}
-          </td>
+          <td>{% if r.recording_file %}{{ r.recording_file }}{% else %}-{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>

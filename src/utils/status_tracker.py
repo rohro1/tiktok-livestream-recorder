@@ -18,18 +18,17 @@ class StatusTracker:
                 "recording_file": None,
             }
 
-    def update_status(self, username, online=None, recording=None):
+    def update_status(self, username, online=False, recording=None):
         with self._lock:
             self._ensure(username)
             entry = self._data[username]
-            if online is not None:
-                if online and not entry["online"]:
-                    entry["live_start"] = datetime.utcnow()
-                if not online and entry["online"]:
-                    entry["last_online"] = datetime.utcnow().isoformat()
-                    entry["live_start"] = None
-                    entry["live_duration"] = 0
-                entry["online"] = bool(online)
+            if online and not entry["online"]:
+                entry["live_start"] = datetime.utcnow()
+            if not online and entry["online"]:
+                entry["last_online"] = datetime.utcnow().isoformat()
+                entry["live_start"] = None
+                entry["live_duration"] = 0
+            entry["online"] = online
             if recording is not None:
                 entry["recording"] = bool(recording)
 

@@ -30,15 +30,16 @@ class GoogleDriveUploader:
             raise FileNotFoundError(local_path)
         folder_id = self.root_id
         if remote_subfolder:
-            # remote_subfolder can be "username/YYYY-MM-DD" — create nested folders
-            parts = str(remote_subfolder).strip("/").split("/")
-            parent = self.root_id
-            for p in parts:
-                parent = self._ensure_folder(p, parent_id=parent)
-            folder_id = parent
+            folder_id = self._ensure_folder(remote_subfolder, parent_id=self.root_id)
         file_metadata = {"name": os.path.basename(local_path), "parents": [folder_id]}
         media = MediaFileUpload(local_path, resumable=True)
         request = self.service.files().create(body=file_metadata, media_body=media, fields="id")
         result = request.execute()
         logger.info("Uploaded %s -> drive id=%s", local_path, result.get("id"))
+        # remove local file; caller can also remove if desired
+        try:
+            os.remove(local_path)
+            logger.info("Removed local file %s", local_path)
+        except Exception:
+            logger.exception("Failed to remove local file %s", local_path)
         return result.get("id")
