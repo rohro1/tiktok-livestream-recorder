@@ -1,3 +1,50 @@
+import logging
+from datetime import datetime
+from .tiktok_api import TikTokAPI
+
+logger = logging.getLogger(__name__)
+
+class TikTokRecorder:
+    def __init__(self, status_tracker=None):
+        self.status_tracker = status_tracker
+        self.recording = False
+        self.current_username = None
+
+    def is_user_live(self, username):
+        """Check if user is live using multiple methods"""
+        try:
+            api = TikTokAPI(username)
+            is_live, stream_url = api.is_live_and_get_stream_url()
+            
+            # Update status tracker
+            if self.status_tracker:
+                self.status_tracker.update_user_status(
+                    username,
+                    is_live=is_live,
+                    stream_url=stream_url if is_live else None,
+                    last_check=datetime.now()
+                )
+            return is_live
+            
+        except Exception as e:
+            logger.error(f"Error checking if {username} is live: {e}")
+            return False
+
+    def record_stream(self, username):
+        """Record a live stream of the given user"""
+        try:
+            # Implementation details here
+            return f"recordings/{username}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        except Exception as e:
+            logger.error(f"Error recording stream for {username}: {e}")
+            return None
+
+    def stop_recording(self):
+        """Stop the current recording"""
+        if self.recording:
+            self.recording = False
+            return True
+        return False
 # src/core/tiktok_recorder.pyimport subprocess
 
 
