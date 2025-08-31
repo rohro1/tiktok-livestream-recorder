@@ -1,73 +1,267 @@
-# src/core/tiktok_recorder.py
-import subprocess
-import threading
-import shlex
-import logging
+"""
+TikTok Stream Recorder
+Handles livestream detection and recording using yt-dlp and ffmpeg
+"""
+
 import os
+import subprocess
+import time
+import logging
+from datetime import datetime
+import yt_dlp
+import requests
+from urllib.parse import urlparse
 
-logger = logging.getLogger("tiktok_recorder")
+logger = logging.getLogger(__name__)
 
-FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")  # if you bundle a static ffmpeg, set env var to its path
+class TikTokRecorder:
+    def __init__(self, status_tracker=None):
+        self.status_tracker = status_tracker
+        self.recordings_dir = "recordings"
+        os.makedirs(self.recordings_dir, exist_ok=True)
+        
+        # yt-dlp configuration
+        self.ydl_opts = {
+            'format': 'best[height<=480]',  # 480p max quality
+            'noplaylist': True,
+            'no_warnings': True,
+            'quiet': True,
+            'extractaudio': False,
+            'writesubtitles': False,
+            'writeautomaticsub': False,
+        }
 
-class TikTokLiveRecorder:
-    """
-    Simple wrapper around ffmpeg to record a live HLS/DASH stream URL to a local file.
-    The recorder writes to a temporary file path and exposes is_running(), start_recording(), stop_recording().
-    """
-    def __init__(self, stream_url: str):
-        self.stream_url = stream_url
-        self.proc = None
-        self.lock = threading.Lock()
-
-    def is_running(self) -> bool:
-        with self.lock:
-            return self.proc is not None and self.proc.poll() is None
-
-    def start_recording(self, out_path: str, resolution: str = "480p") -> bool:
-        if not self.stream_url:
-            logger.warning("No stream_url provided to recorder (will still attempt to run ffmpeg to probe).")
-        # ffmpeg command: read input (stream_url) and transcode to mp4 at ~480p
-        ffmpeg_cmd = [
-            FFMPEG_BIN,
-            "-y",
-            "-hide_banner",
-            "-loglevel", "warning",
-            "-i", self.stream_url or "pipe:"),
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-maxrate", "1000k",
-            "-bufsize", "2000k",
-            "-vf", "scale=-2:480",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-f", "mp4",
-            out_path
-        ]
-        # Python lists -> shell exec
+    def get_tiktok_live_url(self, username):
+        """
+        Get TikTok live stream URL using multiple methods
+        Returns None if user is not live
+        """
         try:
-            with self.lock:
-                # if ffmpeg binary not present, this will raise FileNotFoundError
-                self.proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            logger.info("Started ffmpeg (pid=%s) -> %s", self.proc.pid if self.proc else None, out_path)
-            return True
-        except FileNotFoundError:
-            logger.exception("ffmpeg binary not found. Set FFMPEG_BIN env to a valid ffmpeg binary or include ffmpeg in image.")
-            return False
-        except Exception:
-            logger.exception("Failed to start ffmpeg")
+            # Method 1: Direct TikTok live URL check
+            live_url = f"https://www.tiktok.com/@{username}/live"
+            
+            # Use yt-dlp to extract stream info
+            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+                try:
+                    info = ydl.extract_info(live_url, download=False)
+                    if info and 'url' in info:
+                        logger.info(f"Found live stream for {username}")
+                        return info['url']
+                except Exception as e:
+                    logger.debug(f"yt-dlp extraction failed for {username}: {e}")
+            
+            # Method 2: Try alternative approach with requests
+            return self._check_live_status_alternative(username)
+            
+        except Exception as e:
+            logger.error(f"Error getting live URL for {username}: {e}")
+            return None
+
+    def _check_live_status_alternative(self, username):
+        """Alternative method to check if user is live"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            # Check the user's profile page
+            profile_url = f"https://www.tiktok.com/@{username}"
+            response = requests.get(profile_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                # Look for live indicators in the page
+                if 'LIVE' in response.text or 'live_status' in response.text:
+                    logger.info(f"User {username} appears to be live (alternative check)")
+                    return f"https://www.tiktok.com/@{username}/live"
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Alternative live check failed for {username}: {e}")
+            return None
+
+    def is_user_live(self, username):
+        """
+        Check if a user is currently live
+        Returns True if live, False otherwise
+        """
+        try:
+            live_url = self.get_tiktok_live_url(username)
+            return live_url is not None
+        except Exception as e:
+            logger.error(f"Error checking live status for {username}: {e}")
             return False
 
-    def stop_recording(self):
-        with self.lock:
-            if not self.proc:
-                return
-            try:
-                self.proc.terminate()
-                self.proc.wait(timeout=15)
-            except Exception:
-                try:
-                    self.proc.kill()
-                except Exception:
-                    pass
-            self.proc = None
-            logger.info("Stopped ffmpeg recording")
+    def record_stream(self, username):
+        """
+        Record a user's livestream
+        Returns the output file path if successful, None otherwise
+        """
+        try:
+            # Get live stream URL
+            stream_url = self.get_tiktok_live_url(username)
+            if not stream_url:
+                logger.error(f"No live stream found for {username}")
+                return None
+
+            # Generate output filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = os.path.join(
+                self.recordings_dir, 
+                f"{username}_{timestamp}.mp4"
+            )
+
+            logger.info(f"Starting recording for {username}: {output_file}")
+            
+            # Update status
+            if self.status_tracker:
+                self.status_tracker.update_user_status(
+                    username,
+                    is_live=True,
+                    recording_start=datetime.now(),
+                    recording_file=output_file
+                )
+
+            # Start recording using yt-dlp
+            success = self._record_with_ytdlp(stream_url, output_file, username)
+            
+            if success and os.path.exists(output_file):
+                logger.info(f"Recording completed: {output_file}")
+                
+                # Update status
+                if self.status_tracker:
+                    self.status_tracker.update_user_status(
+                        username,
+                        is_live=False,
+                        recording_end=datetime.now(),
+                        last_recording=output_file
+                    )
+                
+                return output_file
+            else:
+                logger.error(f"Recording failed for {username}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error recording stream for {username}: {e}")
+            return None
+
+    def _record_with_ytdlp(self, stream_url, output_file, username):
+        """Record using yt-dlp"""
+        try:
+            ydl_opts = {
+                **self.ydl_opts,
+                'outtmpl': output_file,
+                'format': 'best[height<=480]/best',  # Prefer 480p
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Start recording
+                ydl.download([stream_url])
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"yt-dlp recording failed for {username}: {e}")
+            # Fallback to ffmpeg if yt-dlp fails
+            return self._record_with_ffmpeg(stream_url, output_file, username)
+
+    def _record_with_ffmpeg(self, stream_url, output_file, username):
+        """Fallback recording using ffmpeg directly"""
+        try:
+            # FFmpeg command for recording
+            cmd = [
+                'ffmpeg',
+                '-i', stream_url,
+                '-c', 'copy',
+                '-f', 'mp4',
+                '-t', '3600',  # Max 1 hour recording
+                output_file,
+                '-y'  # Overwrite output file
+            ]
+            
+            logger.info(f"Starting ffmpeg recording for {username}")
+            
+            # Run ffmpeg
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Monitor the process
+            while True:
+                if process.poll() is not None:
+                    break
+                    
+                # Check if user is still live every 30 seconds
+                time.sleep(30)
+                if not self.is_user_live(username):
+                    logger.info(f"User {username} went offline, stopping recording")
+                    process.terminate()
+                    break
+            
+            # Wait for process to finish
+            stdout, stderr = process.communicate(timeout=60)
+            
+            if process.returncode == 0:
+                logger.info(f"FFmpeg recording completed for {username}")
+                return True
+            else:
+                logger.error(f"FFmpeg failed for {username}: {stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.warning(f"FFmpeg timeout for {username}")
+            process.kill()
+            return False
+        except Exception as e:
+            logger.error(f"FFmpeg error for {username}: {e}")
+            return False
+
+    def get_recording_duration(self, file_path):
+        """Get duration of a recording file"""
+        try:
+            cmd = [
+                'ffprobe',
+                '-v', 'quiet',
+                '-show_entries', 'format=duration',
+                '-of', 'csv=p=0',
+                file_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                duration = float(result.stdout.strip())
+                return duration
+            else:
+                return 0
+                
+        except Exception as e:
+            logger.error(f"Error getting duration for {file_path}: {e}")
+            return 0
+
+    def cleanup_old_recordings(self, days=7):
+        """Clean up recordings older than specified days"""
+        try:
+            cutoff_time = datetime.now().timestamp() - (days * 24 * 3600)
+            removed_count = 0
+            
+            for file_name in os.listdir(self.recordings_dir):
+                file_path = os.path.join(self.recordings_dir, file_name)
+                
+                if os.path.isfile(file_path):
+                    file_time = os.path.getmtime(file_path)
+                    
+                    if file_time < cutoff_time:
+                        os.remove(file_path)
+                        removed_count += 1
+                        logger.info(f"Removed old recording: {file_name}")
+            
+            logger.info(f"Cleaned up {removed_count} old recordings")
+            return removed_count
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up recordings: {e}")
+            return 0

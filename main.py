@@ -1,189 +1,273 @@
-# main.py
+#!/usr/bin/env python3
+"""
+TikTok Livestream Recorder - Main Flask Application
+Compatible with Render Free Tier
+"""
+
 import os
+import json
+import threading
+import time
+from datetime import datetime, timedelta
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session
 import logging
-from flask import Flask, redirect, render_template, request, url_for, jsonify
-from concurrent.futures import ThreadPoolExecutor
-from time import sleep
-from datetime import datetime
-from pathlib import Path
-from threading import Thread
-
-# local imports (package style)
-from src.utils.oauth_drive import create_auth_url, fetch_and_return_credentials_json, get_drive_service
+from src.core.tiktok_recorder import TikTokRecorder
 from src.utils.status_tracker import StatusTracker
-from src.core.tiktok_api import TikTokAPI
-from src.core.tiktok_recorder import TikTokLiveRecorder
-from src.utils.folder_manager import make_user_folders
 from src.utils.google_drive_uploader import GoogleDriveUploader
+from src.utils.oauth_drive import DriveOAuth
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("tiktok-recorder")
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Settings (set in Render environment)
-PORT = int(os.environ.get("PORT", "10000"))
-OAUTH_CREDENTIALS_FILE = os.environ.get("OAUTH_CREDENTIALS_FILE", "credentials.json")  # client secret file path (keep secret)
-OAUTH_REDIRECT = os.environ.get("OAUTH_REDIRECT")  # e.g. https://<your-render>.onrender.com/oauth2callback
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-USERNAMES_FILE = os.environ.get("USERNAMES_FILE", "usernames.txt")
-RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "/tmp/recordings")  # tmp on render; we delete after upload
-POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "12"))
-DRIVE_ROOT_FOLDER = os.environ.get("DRIVE_ROOT_FOLDER", "TikTokRecordings")
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 
-Path(RECORDINGS_DIR).mkdir(parents=True, exist_ok=True)
+# Global instances
+status_tracker = StatusTracker()
+recorder = TikTokRecorder(status_tracker)
+oauth_helper = DriveOAuth()
+drive_uploader = None
 
-app = Flask(__name__, template_folder="templates")
+# Global state
+recording_threads = {}
+monitoring_active = False
 
-def read_usernames(path):
-    out = []
+def load_usernames():
+    """Load usernames from file"""
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                u = line.strip()
-                if u and not u.startswith("#"):
-                    out.append(u)
+        with open('usernames.txt', 'r') as f:
+            usernames = [line.strip() for line in f if line.strip()]
+        logger.info(f"Loaded {len(usernames)} usernames")
+        return usernames
     except FileNotFoundError:
-        logger.warning("Usernames file not found: %s", path)
-    return out
+        logger.warning("usernames.txt not found, creating empty file")
+        with open('usernames.txt', 'w') as f:
+            f.write("")
+        return []
 
-usernames = read_usernames(USERNAMES_FILE)
-status = StatusTracker()
-recorders = {}     # username -> TikTokLiveRecorder instance
-executor = ThreadPoolExecutor(max_workers=4)
-uploader = None    # GoogleDriveUploader singleton (constructed when creds available)
+def monitoring_loop():
+    """Main monitoring loop that runs in background"""
+    global monitoring_active
+    monitoring_active = True
+    
+    while monitoring_active:
+        try:
+            usernames = load_usernames()
+            
+            for username in usernames:
+                if not monitoring_active:
+                    break
+                    
+                try:
+                    # Check if user is live
+                    is_live = recorder.is_user_live(username)
+                    
+                    # Update last checked time
+                    status_tracker.update_user_status(
+                        username, 
+                        is_live=is_live,
+                        last_check=datetime.now()
+                    )
+                    
+                    if is_live and username not in recording_threads:
+                        # Start recording
+                        logger.info(f"Starting recording for {username}")
+                        thread = threading.Thread(
+                            target=record_user_stream,
+                            args=(username,),
+                            daemon=True
+                        )
+                        thread.start()
+                        recording_threads[username] = thread
+                        
+                    elif not is_live and username in recording_threads:
+                        # User went offline, recording will stop automatically
+                        logger.info(f"User {username} went offline")
+                        
+                except Exception as e:
+                    logger.error(f"Error checking {username}: {e}")
+                    
+                time.sleep(2)  # Small delay between users
+                
+            # Wait 30 seconds before next check cycle
+            time.sleep(30)
+            
+        except Exception as e:
+            logger.error(f"Error in monitoring loop: {e}")
+            time.sleep(60)  # Wait longer on error
 
-def ensure_uploader():
-    global uploader
-    if uploader:
-        return
-    service = get_drive_service(OAUTH_CREDENTIALS_FILE, SCOPES)
-    if service:
-        uploader = GoogleDriveUploader(service, drive_folder_root=DRIVE_ROOT_FOLDER)
-        logger.info("Drive uploader initialized")
-    else:
-        logger.info("Drive service not available yet (no token)")
+def record_user_stream(username):
+    """Record a user's livestream"""
+    try:
+        # Start recording
+        output_file = recorder.record_stream(username)
+        
+        if output_file and os.path.exists(output_file):
+            logger.info(f"Recording completed for {username}: {output_file}")
+            
+            # Upload to Google Drive if configured
+            global drive_uploader
+            if drive_uploader:
+                try:
+                    drive_url = drive_uploader.upload_video(output_file, username)
+                    if drive_url:
+                        status_tracker.update_user_status(
+                            username,
+                            last_recording=output_file,
+                            drive_link=drive_url
+                        )
+                        logger.info(f"Uploaded {username}'s recording to Drive: {drive_url}")
+                    else:
+                        logger.error(f"Failed to upload {username}'s recording to Drive")
+                except Exception as e:
+                    logger.error(f"Drive upload error for {username}: {e}")
+        else:
+            logger.error(f"Recording failed for {username}")
+            
+    except Exception as e:
+        logger.error(f"Error recording {username}: {e}")
+    finally:
+        # Remove from active recordings
+        if username in recording_threads:
+            del recording_threads[username]
 
-def recording_output_path(username):
-    user_dir = Path(RECORDINGS_DIR) / username
-    user_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    return str(user_dir / f"{username}_{ts}.mp4")
+@app.route('/')
+def home():
+    """Home page redirect to status"""
+    return redirect(url_for('status'))
 
-def poll_once():
-    global usernames
-    usernames = read_usernames(USERNAMES_FILE) or usernames
-    make_user_folders(usernames, RECORDINGS_DIR)
-    ensure_uploader()
-
+@app.route('/status')
+def status():
+    """Main dashboard showing user statuses"""
+    usernames = load_usernames()
+    user_statuses = []
+    
     for username in usernames:
-        try:
-            api = TikTokAPI(username)
-            is_live, stream_url = api.is_live_and_get_stream_url()
-            logger.debug("User %s live=%s url=%s", username, is_live, bool(stream_url))
-            if is_live:
-                status.update_status(username, online=True)
-                status.update_live_duration(username)
-                rec = recorders.get(username)
-                if not rec or not rec.is_running():
-                    out_path = recording_output_path(username)
-                    def start_record(username=username, stream_url=stream_url, out_path=out_path):
-                        # If we don't have a direct stream_url, try to let yt-dlp/recorder attempt
-                        rec_local = TikTokLiveRecorder(stream_url)
-                        ok = rec_local.start_recording(out_path, resolution="480p")
-                        if ok:
-                            recorders[username] = rec_local
-                            status.set_recording_file(username, out_path)
-                            status.update_status(username, recording=True)
-                            logger.info("Started recording %s -> %s", username, out_path)
-                        else:
-                            status.update_status(username, recording=False)
-                    executor.submit(start_record)
-                else:
-                    status.update_live_duration(username)
-            else:
-                status.update_status(username, online=False)
-                rec = recorders.get(username)
-                if rec and rec.is_running():
-                    logger.info("Stopping recorder for %s", username)
-                    rec.stop_recording()
-                    out_file = status.get_recording_file(username)
-                    status.set_recording_file(username, None)
-                    status.update_status(username, recording=False)
-                    # upload immediately and remove local file
-                    if out_file and uploader:
-                        try:
-                            uploader.upload_file(out_file, remote_subfolder=username)
-                            logger.info("Uploaded and removing local file %s", out_file)
-                        except Exception:
-                            logger.exception("Upload failed for %s", username)
-                        finally:
-                            try:
-                                if out_file and os.path.exists(out_file):
-                                    os.remove(out_file)
-                            except Exception:
-                                logger.exception("Failed to remove local file %s", out_file)
-        except Exception:
-            logger.exception("Error polling %s", username)
+        user_data = status_tracker.get_user_status(username)
+        user_data['username'] = username
+        user_data['is_recording'] = username in recording_threads
+        user_statuses.append(user_data)
+    
+    return render_template('status.html', 
+                         users=user_statuses, 
+                         monitoring_active=monitoring_active)
 
-def poll_loop():
-    logger.info("Starting poll loop (interval=%s)", POLL_INTERVAL)
-    while True:
-        try:
-            poll_once()
-        except Exception:
-            logger.exception("Unhandled exception in poll loop")
-        sleep(POLL_INTERVAL)
+@app.route('/api/status')
+def api_status():
+    """API endpoint for status data"""
+    usernames = load_usernames()
+    user_statuses = []
+    
+    for username in usernames:
+        user_data = status_tracker.get_user_status(username)
+        user_data['username'] = username
+        user_data['is_recording'] = username in recording_threads
+        user_statuses.append(user_data)
+    
+    return jsonify({
+        'users': user_statuses,
+        'monitoring_active': monitoring_active,
+        'total_users': len(usernames),
+        'active_recordings': len(recording_threads)
+    })
 
-Thread(target=poll_loop, daemon=True).start()
-
-@app.route("/")
-def index():
-    return redirect(url_for("status_page"))
-
-@app.route("/authorize")
+@app.route('/authorize')
 def authorize():
-    redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
-    auth_url = create_auth_url(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri)
-    return render_template("authorize.html", auth_url=auth_url)
+    """Google Drive authorization page"""
+    return render_template('authorize.html')
 
-@app.route("/oauth2callback")
-def oauth2callback():
-    redirect_uri = OAUTH_REDIRECT or (request.url_root.rstrip("/") + "/oauth2callback")
-    full_url = request.url
-    # This will exchange code and return the token JSON string (but won't save it on disk)
-    creds_json = fetch_and_return_credentials_json(OAUTH_CREDENTIALS_FILE, SCOPES, redirect_uri, full_url)
-    if creds_json:
-        # Important: we instruct the user to add this JSON to their Render secret named TOKEN_JSON
-        return (
-            "<h2>OAuth success</h2>"
-            "<p>DO NOT commit this to GitHub. Copy the JSON below and create a Render secret named <code>TOKEN_JSON</code> with its value.</p>"
-            f"<textarea cols=100 rows=20>{creds_json}</textarea>"
-            "<p>After adding the TOKEN_JSON secret, redeploy or restart the service so it picks up the token.</p>"
-            f"<p><a href='{url_for('status_page')}'>Go to status</a></p>"
-        )
-    else:
-        return "<p>OAuth failed or missing code param. Check logs.</p>"
+@app.route('/auth/google')
+def auth_google():
+    """Start Google OAuth flow"""
+    try:
+        auth_url = oauth_helper.get_authorization_url()
+        return redirect(auth_url)
+    except Exception as e:
+        logger.error(f"OAuth error: {e}")
+        return f"Authorization error: {e}", 500
 
-@app.route("/status")
-def status_page():
-    rows = []
-    for username in usernames:
-        st = status.get_status(username)
-        profile_url = f"https://www.tiktok.com/@{username}"
-        live_url = f"https://www.tiktok.com/@{username}/live"
-        rows.append({
-            "username": username,
-            "profile_url": profile_url,
-            "live_url": live_url,
-            "last_online": st.get("last_online") or "N/A",
-            "live_duration": st.get("live_duration", 0),
-            "online": st.get("online", False),
-            "recording": st.get("recording", False),
-            "recording_file": st.get("recording_file"),
-        })
-    if request.args.get("json") == "1":
-        return jsonify({r["username"]: r for r in rows})
-    return render_template("status.html", rows=rows)
+@app.route('/auth/callback')
+def auth_callback():
+    """Handle Google OAuth callback"""
+    try:
+        code = request.args.get('code')
+        if not code:
+            return "No authorization code received", 400
+        
+        # Exchange code for credentials
+        creds = oauth_helper.handle_callback(code)
+        
+        if creds:
+            # Initialize Drive uploader
+            global drive_uploader
+            drive_uploader = GoogleDriveUploader(creds)
+            session['drive_authorized'] = True
+            logger.info("Google Drive authorization successful")
+            return redirect(url_for('status'))
+        else:
+            return "Authorization failed", 400
+            
+    except Exception as e:
+        logger.error(f"Callback error: {e}")
+        return f"Callback error: {e}", 500
 
-if __name__ == "__main__":
-    logger.info("App starting on port %s", PORT)
-    app.run(host="0.0.0.0", port=PORT)
+@app.route('/start_monitoring', methods=['POST'])
+def start_monitoring():
+    """Start the monitoring system"""
+    global monitoring_active
+    
+    if not monitoring_active:
+        thread = threading.Thread(target=monitoring_loop, daemon=True)
+        thread.start()
+        logger.info("Monitoring started")
+    
+    return jsonify({'success': True, 'monitoring_active': True})
+
+@app.route('/stop_monitoring', methods=['POST'])
+def stop_monitoring():
+    """Stop the monitoring system"""
+    global monitoring_active
+    monitoring_active = False
+    logger.info("Monitoring stopped")
+    
+    return jsonify({'success': True, 'monitoring_active': False})
+
+@app.route('/health')
+def health():
+    """Health check endpoint for Render"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'monitoring_active': monitoring_active,
+        'active_recordings': len(recording_threads)
+    })
+
+if __name__ == '__main__':
+    # Create required directories
+    os.makedirs('recordings', exist_ok=True)
+    os.makedirs('logs', exist_ok=True)
+    
+    # Load existing credentials if available
+    try:
+        if os.path.exists('credentials.json'):
+            creds = oauth_helper.load_credentials()
+            if creds and creds.valid:
+                drive_uploader = GoogleDriveUploader(creds)
+                logger.info("Loaded existing Google Drive credentials")
+    except Exception as e:
+        logger.warning(f"Could not load existing credentials: {e}")
+    
+    # Auto-start monitoring if usernames exist
+    usernames = load_usernames()
+    if usernames and not monitoring_active:
+        thread = threading.Thread(target=monitoring_loop, daemon=True)
+        thread.start()
+        logger.info("Auto-started monitoring")
+    
+    # Run Flask app
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port, debug=False)
