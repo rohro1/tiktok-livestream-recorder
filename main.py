@@ -194,15 +194,24 @@ def home():
 @app.route('/status')
 def status():
     """Main dashboard showing user statuses"""
-    # Initial status check if needed
-    if not status_tracker.has_recent_checks():
-        check_all_live_status()
-
-    # Cache bust every 5 seconds
-    cache_timestamp = int(time.time() / 5)
-    usernames = get_cached_usernames(cache_timestamp)
+    usernames = get_cached_usernames(int(time.time() / 5))
     user_statuses = {}
     
+    # Check statuses if needed or requested
+    need_check = not status_tracker.has_recent_checks() or request.args.get('refresh')
+    if need_check:
+        for username in usernames:
+            try:
+                is_live = recorder.is_user_live(username)
+                status_tracker.update_user_status(
+                    username,
+                    is_live=is_live,
+                    last_check=datetime.now()
+                )
+            except Exception as e:
+                logger.error(f"Error checking {username}: {e}")
+    
+    # Get current statuses
     for username in usernames:
         user_data = status_tracker.get_user_status(username)
         user_data['username'] = username

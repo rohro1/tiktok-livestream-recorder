@@ -72,3 +72,17 @@ class StatusTracker:
         with self.lock:
             return [user for user, data in self.status.items() 
                    if data.get('is_live', False)]
+
+    def has_recent_checks(self, max_age_seconds=300):  # 5 minutes
+        """Check if we have recent status checks"""
+        if not self.lock:
+            return False
+            
+        now = datetime.now()
+        for last_check in self.lock.values():
+            if (now - last_check).total_seconds() < max_age_seconds:
+                return True
+        return False
+
+    def get_all_statuses(self):
+        return self.status
