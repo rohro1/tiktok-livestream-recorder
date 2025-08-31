@@ -294,3 +294,13 @@ class GoogleDriveUploader:
         except Exception as e:
             logger.error(f"Error getting storage usage: {e}")
             return {}
+
+    def test_connection(self):
+        """Test Google Drive connection"""
+        try:
+            # Try to list files (limit to 1) to test connection
+            response = self.service.files().list(pageSize=1).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Drive connection test failed: {e}")
+            raise

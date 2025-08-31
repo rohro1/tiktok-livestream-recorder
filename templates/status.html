@@ -383,7 +383,7 @@
             <h3>Controls</h3>
             <div class="control-group">
                 <a href="/authorize" class="btn btn-primary">🔐 Authorize Google Drive</a>
-                <a href="/start_monitoring" class="btn btn-success">▶️ Start Monitoring</a>
+                <button onclick="startMonitoring()" class="btn btn-success">▶️ Start Monitoring</button>
                 <a href="/test_google_drive" class="btn btn-primary">🧪 Test Drive Connection</a>
             </div>
             
@@ -497,6 +497,23 @@
                 location.reload();
             }
         });
+        
+        async function startMonitoring() {
+            try {
+                const response = await fetch('/start_monitoring', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    location.reload();
+                }
+            } catch (error) {
+                console.error('Error starting monitoring:', error);
+            }
+        }
     </script>
 </body>
 </html>

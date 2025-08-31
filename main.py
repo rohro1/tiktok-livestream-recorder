@@ -272,44 +272,42 @@ def oauth2callback():
         logger.error(f"Callback error: {e}")
         return f"Callback error: {e}", 500
 
-@app.route('/test_google_drive')
-def test_google_drive():
-    """Test Google Drive connection"""
-    if not drive_uploader:
-        return "Google Drive not configured", 400
-    
-    try:
-        # Test drive connection
-        drive_uploader.test_connection()
-        return jsonify({'status': 'success', 'message': 'Drive connection successful'})
-    except Exception as e:
-        logger.error(f"Drive test failed: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-# Change this to accept both GET and POST for easier frontend interaction
 @app.route('/start_monitoring', methods=['GET', 'POST'])
 def start_monitoring():
     """Start the monitoring system"""
     global monitoring_active
     
-    if request.method == 'GET':
-        return jsonify({'monitoring_active': monitoring_active})
-        
-    if not monitoring_active:
-        thread = threading.Thread(target=monitoring_loop, daemon=True)
-        thread.start()
-        logger.info("Monitoring started")
+    if request.method == 'POST':
+        if not monitoring_active:
+            thread = threading.Thread(target=monitoring_loop, daemon=True)
+            thread.start()
+            monitoring_active = True
+            logger.info("Monitoring started")
+        return jsonify({'success': True, 'monitoring_active': True})
     
-    return jsonify({'success': True, 'monitoring_active': True})
+    return jsonify({'monitoring_active': monitoring_active})
 
-@app.route('/stop_monitoring', methods=['POST'])
-def stop_monitoring():
-    """Stop the monitoring system"""
-    global monitoring_active
-    monitoring_active = False
-    logger.info("Monitoring stopped")
+@app.route('/test_google_drive')
+def test_google_drive():
+    """Test Google Drive connection"""
+    if not drive_uploader:
+        return jsonify({
+            'status': 'error',
+            'message': 'Google Drive not configured. Please authorize first.'
+        }), 400
     
-    return jsonify({'success': True, 'monitoring_active': False})
+    try:
+        drive_uploader.test_connection()
+        return jsonify({
+            'status': 'success',
+            'message': 'Drive connection successful'
+        })
+    except Exception as e:
+        logger.error(f"Drive test failed: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/health')
 def health():
