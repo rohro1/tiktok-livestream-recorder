@@ -5,7 +5,6 @@ import logging
 import shlex
 import re
 import requests
-import yt_dlp
 from typing import Tuple
 
 logger = logging.getLogger("tiktok_api")
@@ -17,6 +16,8 @@ class TikTokAPI:
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
 
     def _run_ytdlp_json(self, url: str):
         cmd = ["yt-dlp", "-j", url]
@@ -104,3 +105,15 @@ class TikTokAPI:
             pass
 
         return False, None
+
+    def get_user_info(self, username):
+        """Get user profile info"""
+        try:
+            url = f"https://www.tiktok.com/api/user/detail/?uniqueId={username}"
+            response = self.session.get(url)
+            if response.status_code == 200:
+                return response.json()
+            return None
+        except Exception as e:
+            logger.error(f"Error getting user info for {username}: {e}")
+            return None

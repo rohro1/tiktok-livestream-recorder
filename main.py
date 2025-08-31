@@ -204,14 +204,13 @@ def status():
         user_data = status_tracker.get_user_status(username)
         user_data['username'] = username
         user_data['is_recording'] = username in recording_threads
-        # Ensure boolean values are properly set
-        user_data['is_live'] = bool(user_data.get('is_live', False))
         user_statuses[username] = user_data
     
     return render_template('status.html', 
                          users=user_statuses, 
                          monitoring_active=monitoring_active,
-                         now=datetime.now())  # Add current time for duration calculations
+                         drive_authorized=bool(drive_uploader),
+                         now=datetime.now())
 
 @app.route('/api/status')
 def api_status():
@@ -235,6 +234,8 @@ def api_status():
 @app.route('/authorize')
 def authorize():
     """Google Drive authorization page"""
+    if drive_uploader:
+        return redirect(url_for('status'))
     return render_template('authorize.html')
 
 @app.route('/auth/google')
