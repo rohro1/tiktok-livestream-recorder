@@ -1,328 +1,320 @@
+#!/usr/bin/env python3
 """
-TikTok Stream Recorder
-Handles livestream detection and recording using yt-dlp and ffmpeg
+TikTok Livestream Recorder - Main Flask Application
+Compatible with Render Free Tier
 """
 
 import os
-import subprocess
+import json
+import threading
 import time
+from datetime import datetime, timedelta
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session
 import logging
-from datetime import datetime
-import yt_dlp
-import requests
-from urllib.parse import urlparse
+from src.core.tiktok_recorder import TikTokRecorder
+from src.utils.status_tracker import StatusTracker
+from src.utils.google_drive_uploader import GoogleDriveUploader
+from src.utils.oauth_drive import DriveOAuth
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-class TikTokRecorder:
-    def __init__(self, status_tracker=None):
-        self.status_tracker = status_tracker
-        self.recordings_dir = "recordings"
-        os.makedirs(self.recordings_dir, exist_ok=True)
-        
-        # yt-dlp configuration
-        self.ydl_opts = {
-            'format': 'best[height<=480]',  # 480p max quality
-            'noplaylist': True,
-            'no_warnings': True,
-            'quiet': True,
-            'extractaudio': False,
-            'writesubtitles': False,
-            'writeautomaticsub': False,
-        }
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 
-    def get_tiktok_live_url(self, username):
-        """
-        Get TikTok live stream URL - only returns URL if user is actually live
-        Returns None if user is not live
-        """
+# Global instances
+status_tracker = StatusTracker()
+recorder = TikTokRecorder(status_tracker)
+oauth_helper = DriveOAuth()
+drive_uploader = None
+
+# Global state
+recording_threads = {}
+monitoring_active = False
+
+def load_usernames():
+    """Load usernames from file"""
+    try:
+        with open('usernames.txt', 'r') as f:
+            usernames = [line.strip() for line in f if line.strip()]
+        logger.info(f"Loaded {len(usernames)} usernames")
+        return usernames
+    except FileNotFoundError:
+        logger.warning("usernames.txt not found, creating empty file")
+        with open('usernames.txt', 'w') as f:
+            f.write("")
+        return []
+
+def monitoring_loop():
+    """Main monitoring loop that runs in background"""
+    global monitoring_active
+    monitoring_active = True
+    logger.info("Starting monitoring loop")
+    
+    while monitoring_active:
         try:
-            live_url = f"https://www.tiktok.com/@{username}/live"
+            usernames = load_usernames()
             
-            # Use yt-dlp to extract stream info - this is the most reliable method
-            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+            if not usernames:
+                logger.warning("No usernames to monitor")
+                time.sleep(60)
+                continue
+            
+            for username in usernames:
+                if not monitoring_active:
+                    break
+                    
                 try:
-                    info = ydl.extract_info(live_url, download=False)
-                    if info and info.get('is_live', False) and 'url' in info:
-                        logger.info(f"Found live stream for {username}")
-                        return info['url']
-                except yt_dlp.DownloadError as e:
-                    if "not currently live" in str(e).lower():
-                        logger.debug(f"User {username} is not live")
-                        return None
+                    # Check if user is live using reliable method
+                    is_live = recorder.is_user_live(username)
+                    
+                    # Update last checked time
+                    status_tracker.update_user_status(
+                        username, 
+                        is_live=is_live,
+                        last_check=datetime.now()
+                    )
+                    
+                    if is_live:
+                        # Only start recording if not already recording
+                        if username not in recording_threads:
+                            logger.info(f"Starting recording for {username}")
+                            thread = threading.Thread(
+                                target=record_user_stream,
+                                args=(username,),
+                                daemon=True
+                            )
+                            thread.start()
+                            recording_threads[username] = thread
+                        else:
+                            logger.debug(f"Already recording {username}")
                     else:
-                        logger.debug(f"yt-dlp error for {username}: {e}")
+                        # User is offline
+                        if username in recording_threads:
+                            logger.info(f"User {username} went offline")
+                        
                 except Exception as e:
-                    logger.debug(f"yt-dlp extraction failed for {username}: {e}")
-            
-            return None
+                    logger.error(f"Error checking {username}: {e}")
+                    # Mark as offline on error
+                    status_tracker.update_user_status(
+                        username, 
+                        is_live=False,
+                        last_check=datetime.now()
+                    )
+                    
+                time.sleep(3)  # Delay between users to avoid rate limiting
+                
+            # Wait 45 seconds before next check cycle (longer to be more respectful)
+            logger.debug(f"Monitoring cycle complete. Active recordings: {len(recording_threads)}")
+            time.sleep(45)
             
         except Exception as e:
-            logger.error(f"Error getting live URL for {username}: {e}")
-            return None
+            logger.error(f"Error in monitoring loop: {e}")
+            time.sleep(120)  # Wait longer on error
 
-    def _check_live_status_alternative(self, username):
-        """Alternative method to check if user is live"""
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            
-            # Try to get the live stream URL directly with yt-dlp
-            live_url = f"https://www.tiktok.com/@{username}/live"
-            
-            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+def record_user_stream(username):
+    """Record a user's livestream"""
+    try:
+        # Double-check if user is still live before recording
+        if not recorder.is_user_live(username):
+            logger.warning(f"User {username} is no longer live, skipping recording")
+            return
+        
+        # Start recording
+        output_file = recorder.record_stream(username)
+        
+        if output_file and os.path.exists(output_file):
+            # Check if file has actual content (> 1MB)
+            file_size = os.path.getsize(output_file)
+            if file_size > 1024 * 1024:  # 1MB minimum
+                logger.info(f"Recording completed for {username}: {output_file} ({file_size} bytes)")
+                
+                # Upload to Google Drive if configured
+                global drive_uploader
+                if drive_uploader:
+                    try:
+                        drive_url = drive_uploader.upload_video(output_file, username)
+                        if drive_url:
+                            status_tracker.update_user_status(
+                                username,
+                                last_recording=output_file,
+                                drive_link=drive_url,
+                                recording_end=datetime.now()
+                            )
+                            logger.info(f"Uploaded {username}'s recording to Drive: {drive_url}")
+                            
+                            # Remove local file after successful upload
+                            try:
+                                os.remove(output_file)
+                                logger.info(f"Cleaned up local file: {output_file}")
+                            except Exception as e:
+                                logger.warning(f"Could not remove local file: {e}")
+                        else:
+                            logger.error(f"Failed to upload {username}'s recording to Drive")
+                    except Exception as e:
+                        logger.error(f"Drive upload error for {username}: {e}")
+                else:
+                    logger.info(f"No Drive uploader configured, keeping local: {output_file}")
+                    status_tracker.update_user_status(
+                        username,
+                        last_recording=output_file,
+                        recording_end=datetime.now()
+                    )
+            else:
+                logger.warning(f"Recording too small for {username}, removing: {file_size} bytes")
                 try:
-                    # Try to extract info - this will fail if not live
-                    info = ydl.extract_info(live_url, download=False)
-                    if info and info.get('is_live', False):
-                        logger.info(f"User {username} confirmed live via yt-dlp")
-                        return live_url
-                except yt_dlp.DownloadError as e:
-                    if "not currently live" in str(e).lower():
-                        logger.debug(f"User {username} is not live")
-                        return None
+                    os.remove(output_file)
                 except Exception:
                     pass
+        else:
+            logger.error(f"Recording failed for {username}")
             
-            # If yt-dlp fails, try web scraping as backup
-            try:
-                profile_url = f"https://www.tiktok.com/@{username}"
-                response = requests.get(profile_url, headers=headers, timeout=5)
-                
-                if response.status_code == 200:
-                    # Look for specific live indicators - be more strict
-                    content = response.text.lower()
-                    if ('"is_live":true' in content or 
-                        'live_status":1' in content or
-                        'room_id' in content and 'live' in content):
-                        logger.info(f"User {username} appears live via web check")
-                        return live_url
-            except Exception as e:
-                logger.debug(f"Web check failed for {username}: {e}")
-            
-            return None
-            
-        except Exception as e:
-            logger.debug(f"Alternative live check failed for {username}: {e}")
-            return None
+    except Exception as e:
+        logger.error(f"Error recording {username}: {e}")
+    finally:
+        # Always remove from active recordings
+        if username in recording_threads:
+            del recording_threads[username]
+        
+        # Update status to not recording
+        status_tracker.update_user_status(
+            username,
+            is_live=False,
+            recording_end=datetime.now()
+        )
 
-    def is_user_live(self, username):
-        """
-        Check if a user is currently live
-        Returns True if live, False otherwise
-        """
-        try:
-            # Use yt-dlp as primary method - it's most reliable
-            live_url = f"https://www.tiktok.com/@{username}/live"
-            
-            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
-                try:
-                    info = ydl.extract_info(live_url, download=False)
-                    if info and info.get('is_live', False):
-                        logger.debug(f"User {username} is live")
-                        return True
-                except yt_dlp.DownloadError as e:
-                    if "not currently live" in str(e).lower():
-                        logger.debug(f"User {username} is not live")
-                        return False
-                except Exception as e:
-                    logger.debug(f"yt-dlp check failed for {username}: {e}")
-            
-            # Don't use alternative method as it's unreliable
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error checking live status for {username}: {e}")
-            return False
+@app.route('/')
+def home():
+    """Home page redirect to status"""
+    return redirect(url_for('status'))
 
-    def record_stream(self, username):
-        """
-        Record a user's livestream
-        Returns the output file path if successful, None otherwise
-        """
-        try:
-            # Get live stream URL - this also verifies user is live
-            stream_url = self.get_tiktok_live_url(username)
-            if not stream_url:
-                logger.warning(f"No live stream found for {username}")
-                return None
+@app.route('/status')
+def status():
+    """Main dashboard showing user statuses"""
+    usernames = load_usernames()
+    user_statuses = []
+    
+    for username in usernames:
+        user_data = status_tracker.get_user_status(username)
+        user_data['username'] = username
+        user_data['is_recording'] = username in recording_threads
+        user_statuses.append(user_data)
+    
+    return render_template('status.html', 
+                         users=user_statuses, 
+                         monitoring_active=monitoring_active)
 
-            # Generate output filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_file = os.path.join(
-                self.recordings_dir, 
-                f"{username}_{timestamp}.mp4"
-            )
+@app.route('/api/status')
+def api_status():
+    """API endpoint for status data"""
+    usernames = load_usernames()
+    user_statuses = []
+    
+    for username in usernames:
+        user_data = status_tracker.get_user_status(username)
+        user_data['username'] = username
+        user_data['is_recording'] = username in recording_threads
+        user_statuses.append(user_data)
+    
+    return jsonify({
+        'users': user_statuses,
+        'monitoring_active': monitoring_active,
+        'total_users': len(usernames),
+        'active_recordings': len(recording_threads)
+    })
 
-            logger.info(f"Starting recording for {username}: {output_file}")
-            
-            # Update status
-            if self.status_tracker:
-                self.status_tracker.update_user_status(
-                    username,
-                    is_live=True,
-                    recording_start=datetime.now(),
-                    recording_file=output_file
-                )
+@app.route('/authorize')
+def authorize():
+    """Google Drive authorization page"""
+    return render_template('authorize.html')
 
-            # Try recording with yt-dlp first
-            success = self._record_with_ytdlp(username, output_file)
-            
-            if success and os.path.exists(output_file):
-                logger.info(f"Recording completed: {output_file}")
-                return output_file
-            else:
-                logger.error(f"Recording failed for {username}")
-                # Clean up failed file
-                if os.path.exists(output_file):
-                    try:
-                        os.remove(output_file)
-                    except Exception:
-                        pass
-                return None
+@app.route('/auth/google')
+def auth_google():
+    """Start Google OAuth flow"""
+    try:
+        auth_url = oauth_helper.get_authorization_url()
+        return redirect(auth_url)
+    except Exception as e:
+        logger.error(f"OAuth error: {e}")
+        return f"Authorization error: {e}", 500
 
-        except Exception as e:
-            logger.error(f"Error recording stream for {username}: {e}")
-            return None
+@app.route('/auth/callback')
+def auth_callback():
+    """Handle Google OAuth callback"""
+    try:
+        code = request.args.get('code')
+        if not code:
+            return "No authorization code received", 400
+        
+        # Exchange code for credentials
+        creds = oauth_helper.handle_callback(code)
+        
+        if creds:
+            # Initialize Drive uploader
+            global drive_uploader
+            drive_uploader = GoogleDriveUploader(creds)
+            session['drive_authorized'] = True
+            logger.info("Google Drive authorization successful")
+            return redirect(url_for('status'))
+        else:
+            return "Authorization failed", 400
+            
+    except Exception as e:
+        logger.error(f"Callback error: {e}")
+        return f"Callback error: {e}", 500
 
-    def _record_with_ytdlp(self, username, output_file):
-        """Record using yt-dlp directly with username"""
-        try:
-            live_url = f"https://www.tiktok.com/@{username}/live"
-            
-            ydl_opts = {
-                'format': 'best[height<=480]/best',  # Prefer 480p
-                'outtmpl': output_file,
-                'live_from_start': True,
-                'wait_for_video': (1, 60),  # Wait up to 60 seconds for stream
-                'no_warnings': True,
-                'quiet': False,  # Enable some output for debugging
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                logger.info(f"Starting yt-dlp recording for {username}")
-                ydl.download([live_url])
-            
-            # Check if file was created and has content
-            if os.path.exists(output_file):
-                file_size = os.path.getsize(output_file)
-                if file_size > 100000:  # At least 100KB
-                    logger.info(f"yt-dlp recording successful for {username}: {file_size} bytes")
-                    return True
-                else:
-                    logger.warning(f"yt-dlp created small file for {username}: {file_size} bytes")
-                    return False
-            else:
-                logger.error(f"yt-dlp did not create output file for {username}")
-                return False
-            
-        except yt_dlp.DownloadError as e:
-            if "not currently live" in str(e).lower():
-                logger.info(f"User {username} is not live (yt-dlp confirmed)")
-            else:
-                logger.error(f"yt-dlp download error for {username}: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"yt-dlp recording failed for {username}: {e}")
-            return False
+@app.route('/start_monitoring', methods=['POST'])
+def start_monitoring():
+    """Start the monitoring system"""
+    global monitoring_active
+    
+    if not monitoring_active:
+        thread = threading.Thread(target=monitoring_loop, daemon=True)
+        thread.start()
+        logger.info("Monitoring started")
+    
+    return jsonify({'success': True, 'monitoring_active': True})
 
-    def _record_with_ffmpeg(self, stream_url, output_file, username):
-        """Fallback recording using ffmpeg directly"""
-        try:
-            # FFmpeg command for recording
-            cmd = [
-                'ffmpeg',
-                '-i', stream_url,
-                '-c', 'copy',
-                '-f', 'mp4',
-                '-t', '3600',  # Max 1 hour recording
-                output_file,
-                '-y'  # Overwrite output file
-            ]
-            
-            logger.info(f"Starting ffmpeg recording for {username}")
-            
-            # Run ffmpeg
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            # Monitor the process
-            while True:
-                if process.poll() is not None:
-                    break
-                    
-                # Check if user is still live every 30 seconds
-                time.sleep(30)
-                if not self.is_user_live(username):
-                    logger.info(f"User {username} went offline, stopping recording")
-                    process.terminate()
-                    break
-            
-            # Wait for process to finish
-            stdout, stderr = process.communicate(timeout=60)
-            
-            if process.returncode == 0:
-                logger.info(f"FFmpeg recording completed for {username}")
-                return True
-            else:
-                logger.error(f"FFmpeg failed for {username}: {stderr}")
-                return False
-                
-        except subprocess.TimeoutExpired:
-            logger.warning(f"FFmpeg timeout for {username}")
-            process.kill()
-            return False
-        except Exception as e:
-            logger.error(f"FFmpeg error for {username}: {e}")
-            return False
+@app.route('/stop_monitoring', methods=['POST'])
+def stop_monitoring():
+    """Stop the monitoring system"""
+    global monitoring_active
+    monitoring_active = False
+    logger.info("Monitoring stopped")
+    
+    return jsonify({'success': True, 'monitoring_active': False})
 
-    def get_recording_duration(self, file_path):
-        """Get duration of a recording file"""
-        try:
-            cmd = [
-                'ffprobe',
-                '-v', 'quiet',
-                '-show_entries', 'format=duration',
-                '-of', 'csv=p=0',
-                file_path
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode == 0:
-                duration = float(result.stdout.strip())
-                return duration
-            else:
-                return 0
-                
-        except Exception as e:
-            logger.error(f"Error getting duration for {file_path}: {e}")
-            return 0
+@app.route('/health')
+def health():
+    """Health check endpoint for Render"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'monitoring_active': monitoring_active,
+        'active_recordings': len(recording_threads)
+    })
 
-    def cleanup_old_recordings(self, days=7):
-        """Clean up recordings older than specified days"""
-        try:
-            cutoff_time = datetime.now().timestamp() - (days * 24 * 3600)
-            removed_count = 0
-            
-            for file_name in os.listdir(self.recordings_dir):
-                file_path = os.path.join(self.recordings_dir, file_name)
-                
-                if os.path.isfile(file_path):
-                    file_time = os.path.getmtime(file_path)
-                    
-                    if file_time < cutoff_time:
-                        os.remove(file_path)
-                        removed_count += 1
-                        logger.info(f"Removed old recording: {file_name}")
-            
-            logger.info(f"Cleaned up {removed_count} old recordings")
-            return removed_count
-            
-        except Exception as e:
-            logger.error(f"Error cleaning up recordings: {e}")
-            return 0
+if __name__ == '__main__':
+    # Create required directories
+    os.makedirs('recordings', exist_ok=True)
+    os.makedirs('logs', exist_ok=True)
+    
+    # Load existing credentials if available
+    try:
+        creds = oauth_helper.load_credentials()
+        if creds and creds.valid:
+            drive_uploader = GoogleDriveUploader(creds)
+            logger.info("Loaded existing Google Drive credentials")
+    except Exception as e:
+        logger.warning(f"Could not load existing credentials: {e}")
+    
+    # Don't auto-start monitoring - let user control it
+    logger.info("Application ready - visit /status to start monitoring")
+    
+    # Run Flask app
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port, debug=False)
