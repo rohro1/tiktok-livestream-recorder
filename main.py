@@ -172,6 +172,20 @@ def record_user_stream(username):
             recording_end=datetime.now()
         )
 
+def check_all_live_status():
+    """Check live status for all users"""
+    usernames = load_usernames()
+    for username in usernames:
+        try:
+            is_live = recorder.is_user_live(username)
+            status_tracker.update_user_status(
+                username,
+                is_live=is_live,
+                last_check=datetime.now()
+            )
+        except Exception as e:
+            logger.error(f"Error checking {username}: {e}")
+
 @app.route('/')
 def home():
     """Home page redirect to status"""
@@ -180,6 +194,10 @@ def home():
 @app.route('/status')
 def status():
     """Main dashboard showing user statuses"""
+    # Initial status check if needed
+    if not status_tracker.has_recent_checks():
+        check_all_live_status()
+
     # Cache bust every 5 seconds
     cache_timestamp = int(time.time() / 5)
     usernames = get_cached_usernames(cache_timestamp)

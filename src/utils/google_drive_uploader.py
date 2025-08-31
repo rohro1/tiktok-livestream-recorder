@@ -6,6 +6,7 @@ Handles uploading recordings to Google Drive with folder organization
 import os
 import logging
 from datetime import datetime
+import pytz
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
@@ -22,6 +23,7 @@ class GoogleDriveUploader:
         """
         self.credentials = credentials
         self.service = build('drive', 'v3', credentials=credentials)
+        self.est_tz = pytz.timezone('US/Eastern')
         self.folder_cache = {}  # Cache folder IDs
 
     def create_folder(self, name, parent_id='root'):
@@ -147,50 +149,34 @@ class GoogleDriveUploader:
                 logger.error(f"File not found: {file_path}")
                 return None
 
-            # Get target folder
-            folder_id = self.get_folder_structure(username)
-            if not folder_id:
-                logger.error(f"Could not create folder structure for {username}")
-                return None
+            # Create user folder
+            user_folder_id = self._get_or_create_folder(username)
 
-            # Prepare file metadata
-            file_name = os.path.basename(file_path)
+            # Create date folder (EST)
+            now = datetime.now(self.est_tz)
+            date_folder = now.strftime('%m-%d-%Y')
+            date_folder_id = self._get_or_create_folder(date_folder, user_folder_id)
+
+            # Count existing recordings for sequential naming
+            query = f"'{date_folder_id}' in parents and mimeType contains 'video/'"
+            results = self.service.files().list(q=query, spaces='drive').execute()
+            existing_count = len(results.get('files', []))
+
+            # Create sequential name
+            sequential_name = f"{existing_count + 1}_Live.mp4"
             file_metadata = {
-                'name': file_name,
-                'parents': [folder_id]
+                'name': sequential_name,
+                'parents': [date_folder_id]
             }
 
-            # Upload file
-            media = MediaFileUpload(
-                file_path,
-                mimetype='video/mp4',
-                resumable=True
-            )
-
-            logger.info(f"Uploading {file_name} to Google Drive...")
-            
+            media = MediaFileUpload(file_path, mimetype='video/mp4', resumable=True)
             file = self.service.files().create(
                 body=file_metadata,
                 media_body=media,
-                fields='id, name, webViewLink'
+                fields='id,webViewLink'
             ).execute()
 
-            file_id = file.get('id')
-            file_url = file.get('webViewLink')
-            
-            logger.info(f"Upload successful: {file_name} -> {file_url}")
-            
-            # Make file publicly viewable (optional)
-            try:
-                self.service.permissions().create(
-                    fileId=file_id,
-                    body={'role': 'reader', 'type': 'anyone'}
-                ).execute()
-                logger.info(f"Made file public: {file_id}")
-            except Exception as e:
-                logger.warning(f"Could not make file public: {e}")
-
-            return file_url
+            return file.get('webViewLink')
 
         except Exception as e:
             logger.error(f"Error uploading {file_path}: {e}")
@@ -304,3 +290,30 @@ class GoogleDriveUploader:
         except Exception as e:
             logger.error(f"Drive connection test failed: {e}")
             raise
+
+    def _get_or_create_folder(self, folder_name, parent_id=None):
+        cache_key = f"{parent_id}:{folder_name}"
+        if cache_key in self.folder_cache:
+            return self.folder_cache[cache_key]
+
+        query = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}'"
+        if parent_id:
+            query += f" and '{parent_id}' in parents"
+
+        results = self.service.files().list(q=query, spaces='drive', fields='files(id)').execute()
+        files = results.get('files', [])
+
+        if files:
+            folder_id = files[0]['id']
+        else:
+            file_metadata = {
+                'name': folder_name,
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            if parent_id:
+                file_metadata['parents'] = [parent_id]
+            folder = self.service.files().create(body=file_metadata, fields='id').execute()
+            folder_id = folder.get('id')
+
+        self.folder_cache[cache_key] = folder_id
+        return folder_id

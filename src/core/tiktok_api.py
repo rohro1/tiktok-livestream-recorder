@@ -7,6 +7,7 @@ import re
 import requests
 import time
 from typing import Tuple
+from datetime import datetime
 
 logger = logging.getLogger("tiktok_api")
 
@@ -15,7 +16,10 @@ class TikTokAPI:
         self.username = username
         self.page_url = f"https://www.tiktok.com/@{username}"
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/json',
+            'Accept-Language': 'en-US',
+            'Cookie': 'tt_webid_v2=1'
         }
         self.session = requests.Session()
         self.session.headers.update(self.headers)
@@ -122,21 +126,27 @@ class TikTokAPI:
     def is_live_and_get_stream_url(self, username):
         """Check if user is live using direct API check"""
         try:
-            # Use TikTok's web API directly
-            url = f"https://www.tiktok.com/api/user/detail/?uniqueId={username}"
+            # Method 1: Check webcast API
+            url = f"https://webcast.tiktok.com/webcast/room/info/?app_language=en&username={username}"
             response = self.session.get(url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
-                if data.get('userInfo', {}).get('user', {}).get('isLive', False):
+                if data.get('data', {}).get('room', {}).get('status', 0) == 2:
                     return True, f"https://www.tiktok.com/@{username}/live"
-                    
-            # Backup check using room API
-            url = f"https://www.tiktok.com/api/live/detail/?aid=1988&uniqueId={username}"
-            response = self.session.get(url, timeout=5)
+
+            # Method 2: Direct room check
+            live_url = f"https://www.tiktok.com/@{username}/live"
+            response = self.session.get(live_url, allow_redirects=False)
+            if response.status_code == 200 and 'isLive":true' in response.text:
+                return True, live_url
+
+            # Method 3: API check
+            api_url = f"https://www.tiktok.com/api/live/detail/?aid=1988&uniqueId={username}"
+            response = self.session.get(api_url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
-                if data.get('data', {}).get('status') == 2:
-                    return True, f"https://www.tiktok.com/@{username}/live"
+                if data.get('LiveRoomInfo', {}).get('status') == 2:
+                    return True, live_url
 
             return False, None
 
