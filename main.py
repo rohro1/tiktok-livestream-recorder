@@ -267,10 +267,17 @@ def oauth2callback():
         
         if creds and creds.valid:
             # Initialize Drive uploader
-            global drive_uploader
+            global drive_uploader, monitoring_active
             drive_uploader = GoogleDriveUploader(creds)
             session['drive_authorized'] = True
             logger.info("Google Drive authorization successful")
+            
+            # Auto-start monitoring if not already running
+            if not monitoring_active:
+                thread = threading.Thread(target=monitoring_loop, daemon=True)
+                thread.start()
+                logger.info("Monitoring auto-started after authorization")
+            
             return redirect(url_for('status'))
         else:
             logger.error("Failed to obtain valid credentials")
@@ -326,6 +333,22 @@ def health():
         'monitoring_active': monitoring_active,
         'active_recordings': len(recording_threads)
     })
+
+@app.route('/add_user', methods=['POST'])
+def add_user():
+    """Add a new user to monitor"""
+    username = request.form.get('username', '').strip()
+    if not username:
+        return jsonify({'error': 'Username is required'}), 400
+    
+    try:
+        with open('usernames.txt', 'a') as f:
+            f.write(f"\n{username}")
+        logger.info(f"Added new user: {username}")
+        return redirect(url_for('status'))
+    except Exception as e:
+        logger.error(f"Error adding user: {e}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # Create required directories

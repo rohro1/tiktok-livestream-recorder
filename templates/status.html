@@ -401,18 +401,19 @@
             <h3>Controls</h3>
             <div class="control-group">
                 {% if drive_authorized %}
-                    <span class="btn btn-success disabled">✓ Google Drive Authorized</span>
+                    <span class="btn btn-success disabled">✓ Google Drive Connected</span>
                 {% else %}
                     <a href="/authorize" class="btn btn-primary">🔐 Authorize Google Drive</a>
                 {% endif %}
                 <button onclick="startMonitoring()" class="btn btn-success">▶️ Start Monitoring</button>
                 {% if drive_authorized %}
-                    <a href="/test_google_drive" class="btn btn-primary">🧪 Test Drive Connection</a>
+                    <a href="/test_google_drive" class="btn btn-primary">🧪 Test Connection</a>
                 {% endif %}
             </div>
             
-            <form method="POST" action="/add_user" class="control-group">
-                <input type="text" name="username" placeholder="Enter TikTok username (without @)" required>
+            <form method="POST" action="/add_user" class="control-group" onsubmit="return validateForm()">
+                <input type="text" name="username" id="username" placeholder="Enter TikTok username (without @)" required 
+                       pattern="[A-Za-z0-9_\.-]+" title="Only letters, numbers, dots, underscores and hyphens allowed">
                 <button type="submit" class="btn btn-primary">➕ Add User</button>
             </form>
         </div>
@@ -538,6 +539,15 @@
             } catch (error) {
                 console.error('Error starting monitoring:', error);
             }
+        }
+        
+        function validateForm() {
+            const username = document.getElementById('username').value;
+            if (!username.match(/^[A-Za-z0-9_\.-]+$/)) {
+                alert('Invalid username format');
+                return false;
+            }
+            return true;
         }
     </script>
 </body>

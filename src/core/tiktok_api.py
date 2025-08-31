@@ -5,6 +5,7 @@ import logging
 import shlex
 import re
 import requests
+import time
 from typing import Tuple
 
 logger = logging.getLogger("tiktok_api")
@@ -117,3 +118,27 @@ class TikTokAPI:
         except Exception as e:
             logger.error(f"Error getting user info for {username}: {e}")
             return None
+
+    def is_live_and_get_stream_url(self, username):
+        """Check if user is live using multiple methods"""
+        try:
+            # Method 1: Direct live room check
+            room_url = f"https://www.tiktok.com/api/live/detail/?aid=1988&uniqueId={username}"
+            response = self.session.get(room_url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('LiveRoomInfo', {}).get('status') == 2:  # 2 = live
+                    return True, f"https://www.tiktok.com/@{username}/live"
+            
+            # Method 2: Web page check
+            live_url = f"https://www.tiktok.com/@{username}/live"
+            response = self.session.get(live_url, allow_redirects=False)
+            if response.status_code == 200 and 'watching' in response.text.lower():
+                return True, live_url
+
+            time.sleep(1)  # Rate limiting
+            return False, None
+
+        except Exception as e:
+            logger.error(f"Error checking live status for {username}: {e}")
+            return False, None
