@@ -122,23 +122,23 @@ class TikTokAPI:
     def is_live_and_get_stream_url(self, username):
         """Check if user is live using multiple methods"""
         try:
-            # Method 1: Direct live room check
-            room_url = f"https://www.tiktok.com/api/live/detail/?aid=1988&uniqueId={username}"
-            response = self.session.get(room_url, timeout=5)
+            # Method 1: WebCast API
+            url = f"https://webcast.tiktok.com/webcast/room/info/?app_language=en&room_id={username}"
+            response = self.session.get(url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
-                if data.get('LiveRoomInfo', {}).get('status') == 2:  # 2 = live
+                if data.get('data', {}).get('room', {}).get('status') == 2:
                     return True, f"https://www.tiktok.com/@{username}/live"
-            
-            # Method 2: Web page check
-            live_url = f"https://www.tiktok.com/@{username}/live"
-            response = self.session.get(live_url, allow_redirects=False)
-            if response.status_code == 200 and 'watching' in response.text.lower():
-                return True, live_url
 
-            time.sleep(1)  # Rate limiting
+            # Method 2: Room API
+            url = f"https://www.tiktok.com/api/live/detail/?aid=1988&uniqueId={username}"
+            response = self.session.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('data', {}).get('status') == 2:
+                    return True, f"https://www.tiktok.com/@{username}/live"
+
             return False, None
-
         except Exception as e:
             logger.error(f"Error checking live status for {username}: {e}")
             return False, None

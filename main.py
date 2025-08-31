@@ -15,6 +15,7 @@ from src.core.tiktok_recorder import TikTokRecorder
 from src.utils.status_tracker import StatusTracker
 from src.utils.google_drive_uploader import GoogleDriveUploader
 from src.utils.oauth_drive import DriveOAuth
+from functools import lru_cache
 
 # Configure logging
 logging.basicConfig(
@@ -50,6 +51,11 @@ def load_usernames():
         with open('usernames.txt', 'w') as f:
             f.write("")
         return []
+
+@lru_cache(maxsize=1)
+def get_cached_usernames(timestamp=None):
+    """Cache usernames for 5 seconds"""
+    return load_usernames()
 
 def monitoring_loop():
     """Main monitoring loop that runs in background"""
@@ -197,7 +203,9 @@ def home():
 @app.route('/status')
 def status():
     """Main dashboard showing user statuses"""
-    usernames = load_usernames()
+    # Cache bust every 5 seconds
+    cache_timestamp = int(time.time() / 5)
+    usernames = get_cached_usernames(cache_timestamp)
     user_statuses = {}
     
     for username in usernames:
@@ -270,9 +278,8 @@ def oauth2callback():
             global drive_uploader, monitoring_active
             drive_uploader = GoogleDriveUploader(creds)
             session['drive_authorized'] = True
-            logger.info("Google Drive authorization successful")
             
-            # Auto-start monitoring if not already running
+            # Auto-start monitoring
             if not monitoring_active:
                 thread = threading.Thread(target=monitoring_loop, daemon=True)
                 thread.start()
@@ -342,9 +349,13 @@ def add_user():
         return jsonify({'error': 'Username is required'}), 400
     
     try:
-        with open('usernames.txt', 'a') as f:
-            f.write(f"\n{username}")
-        logger.info(f"Added new user: {username}")
+        usernames = load_usernames()
+        if username not in usernames:
+            with open('usernames.txt', 'a') as f:
+                if usernames:  # If file not empty, add newline
+                    f.write('\n')
+                f.write(username)
+            logger.info(f"Added new user: {username}")
         return redirect(url_for('status'))
     except Exception as e:
         logger.error(f"Error adding user: {e}")
