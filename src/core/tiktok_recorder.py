@@ -11,9 +11,11 @@ import yt_dlp
 logger = logging.getLogger(__name__)
 
 class TikTokRecorder:
-    def __init__(self):
+    def __init__(self, status_tracker=None):
         self.recording_process = None
         self.is_recording = False
+        self.status_tracker = status_tracker
+        self.current_username = None
         
     def check_if_live(self, username):
         """Check if a TikTok user is currently live and return stream URL"""
@@ -260,3 +262,34 @@ class TikTokRecorder:
                 'followers': 0,
                 'profile_url': f"https://www.tiktok.com/@{username}"
             }
+    
+    def is_user_live(self, username):
+        """Check if user is live using check_if_live method"""
+        try:
+            stream_url = self.check_if_live(username)
+            is_live = bool(stream_url)
+            if self.status_tracker:
+                self.status_tracker.update_user_status(username, is_live=is_live)
+            return is_live
+        except Exception as e:
+            logger.error(f"Error checking if {username} is live: {e}")
+            return False
+
+    def record_stream(self, username):
+        """Record a user's livestream"""
+        try:
+            stream_url = self.check_if_live(username)
+            if not stream_url:
+                logger.error(f"User {username} is not live")
+                return None
+
+            output_dir = os.path.join('recordings', username)
+            os.makedirs(output_dir, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_file = os.path.join(output_dir, f'{username}_{timestamp}.mp4')
+
+            return self.start_recording(stream_url, output_file)
+
+        except Exception as e:
+            logger.error(f"Error recording {username}: {e}")
+            return None

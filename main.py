@@ -26,10 +26,12 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 
-# Global instances
+# Initialize components
 status_tracker = StatusTracker()
-recorder = TikTokRecorder(status_tracker)
+recorder = TikTokRecorder(status_tracker)  # This will now work correctly
 oauth_helper = DriveOAuth()
+
+# Global instances
 drive_uploader = None
 
 # Global state
