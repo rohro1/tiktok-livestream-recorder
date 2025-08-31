@@ -198,13 +198,13 @@ def home():
 def status():
     """Main dashboard showing user statuses"""
     usernames = load_usernames()
-    user_statuses = []
+    user_statuses = {}
     
     for username in usernames:
         user_data = status_tracker.get_user_status(username)
         user_data['username'] = username
         user_data['is_recording'] = username in recording_threads
-        user_statuses.append(user_data)
+        user_statuses[username] = user_data
     
     return render_template('status.html', 
                          users=user_statuses, 

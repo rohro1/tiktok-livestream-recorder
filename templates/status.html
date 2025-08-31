@@ -374,7 +374,7 @@
         
         <div class="stats">
             <div class="stat-card">
-                <h3 class="live-count">{{ users.values() | selectattr('live_status', 'equalto', 'live') | list | length }}</h3>
+                <h3 class="live-count">{{ users.values() | selectattr('is_live', true) | list | length }}</h3>
                 <p>Users Live</p>
             </div>
             <div class="stat-card">
@@ -390,7 +390,7 @@
         {% if users %}
         <div class="users-grid">
             {% for username, user in users.items() %}
-            <div class="user-card {% if user.live_status == 'live' %}live{% endif %}">
+            <div class="user-card {% if user.is_live %}live{% endif %}">
                 <div class="user-header">
                     <div class="user-info">
                         <h4>{{ user.username }}</h4>
@@ -478,4 +478,10 @@
         
         // Refresh when clicking anywhere on the page
         document.addEventListener('click', function(e) {
-            if (!e.target.closest
+            if (!e.target.closest('.no-users')) {
+                location.reload();
+            }
+        });
+    </script>
+</body>
+</html>
