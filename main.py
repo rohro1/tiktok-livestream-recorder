@@ -400,9 +400,7 @@ if __name__ == '__main__':
     except Exception as e:
         logger.warning(f"Could not load existing credentials: {e}")
     
-    # Don't auto-start monitoring - let user control it
-    logger.info("Application ready - visit /status to start monitoring")
-    
-    # Run Flask app
-    port = int(os.environ.get('PORT', 8000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # Run Flask app with correct port for Render
+    port = int(os.environ.get('PORT', '10000'))
+    logger.info(f"Starting server on port {port}")
+    app.run(host='0.0.0.0', port=port)
