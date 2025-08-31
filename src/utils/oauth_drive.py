@@ -8,7 +8,7 @@ import json
 import logging
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 
 logger = logging.getLogger(__name__)
 
@@ -60,57 +60,40 @@ class DriveOAuth:
             logger.error(f"Error loading credentials: {e}")
             return None
 
-    def get_authorization_url(self):
-        """
-        Get Google OAuth authorization URL
+    def _load_credentials_config(self):
+        """Load credentials from file or environment"""
+        if os.environ.get('GOOGLE_CREDENTIALS_JSON'):
+            try:
+                return json.loads(os.environ['GOOGLE_CREDENTIALS_JSON'])
+            except Exception as e:
+                logger.error(f"Failed to parse credentials from environment: {e}")
+                return None
         
-        Returns:
-            str: Authorization URL
-        """
         try:
-            # Load client configuration from environment or file
-            client_config = None
-            
-            # Try environment variable first (for Render)
-            credentials_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
-            if credentials_json:
-                try:
-                    client_config = json.loads(credentials_json)
-                    logger.info("Loaded credentials from environment variable")
-                except json.JSONDecodeError as e:
-                    logger.error(f"Invalid JSON in GOOGLE_CREDENTIALS_JSON: {e}")
-            
-            # Fallback to file
-            if not client_config and os.path.exists(self.credentials_file):
-                with open(self.credentials_file, 'r') as f:
-                    client_config = json.load(f)
-                logger.info("Loaded credentials from file")
-            
-            if not client_config:
-                raise FileNotFoundError("No credentials found in environment or file")
-
-            # Create flow from client config
-            flow = Flow.from_client_config(
-                client_config,
-                scopes=self.scopes,
-                redirect_uri=self.redirect_uri
-            )
-            
-            authorization_url, _ = flow.authorization_url(
-                access_type='offline',
-                include_granted_scopes='true',
-                prompt='consent'  # Force consent to get refresh token
-            )
-            
-            # Store flow state
-            self._save_flow_state(flow)
-            
-            logger.info("Generated authorization URL")
-            return authorization_url
-            
+            with open(self.credentials_file, 'r') as f:
+                return json.load(f)
         except Exception as e:
-            logger.error(f"Error generating authorization URL: {e}")
-            raise
+            logger.error(f"Failed to load credentials file: {e}")
+            return None
+
+    def get_authorization_url(self):
+        """Get OAuth URL with correct redirect"""
+        creds_config = self._load_credentials_config()
+        if not creds_config:
+            raise Exception("No credentials configuration found")
+
+        # Use environment redirect URI if available, fallback to credentials
+        redirect_uri = os.environ.get('OAUTH_REDIRECT_URI')
+        if redirect_uri:
+            creds_config['web']['redirect_uris'] = [redirect_uri]
+            creds_config['web']['redirect_uri'] = redirect_uri
+
+        flow = InstalledAppFlow.from_client_config(
+            creds_config, 
+            self.scopes,
+            redirect_uri=redirect_uri
+        )
+        return flow.authorization_url(prompt='consent')[0]
 
     def handle_callback(self, authorization_code):
         """

@@ -374,7 +374,7 @@
         
         <div class="stats">
             <div class="stat-card">
-                <h3 class="live-count">{{ users.values() | selectattr('is_live', 'eq', True) | list | length }}</h3>
+                <h3 class="live-count">{{ users.values() | selectattr('is_live') | list | length }}</h3>
                 <p>Users Live</p>
             </div>
             <div class="stat-card">
@@ -410,14 +410,16 @@
                 </div>
                 
                 <div class="user-details">
+                    {% if user.last_updated_formatted %}
                     <div class="detail-item">
-                        <strong>Last Check</strong>
-                        <span>{{ user.last_check | default('Never', True) }}</span>
+                        <strong>Last Updated</strong>
+                        <span>{{ user.last_updated_formatted }}</span>
                     </div>
-                    {% if user.is_live and user.recording_start %}
+                    {% endif %}
+                    {% if user.last_seen_formatted %}
                     <div class="detail-item">
-                        <strong>Recording Time</strong>
-                        <span>{{ ((now - user.recording_start) | string).split('.')[0] }}</span>
+                        <strong>Last Seen Live</strong>
+                        <span>{{ user.last_seen_formatted }}</span>
                     </div>
                     {% endif %}
                 </div>

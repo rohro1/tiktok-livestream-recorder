@@ -30,19 +30,42 @@ class StatusTracker:
             if username not in self.status:
                 self.status[username] = {}
             
+            # Update with current timestamp
+            current_time = datetime.now().isoformat()
+            
+            # Handle special cases for live status
+            if 'is_live' in kwargs:
+                self.status[username]['is_live'] = bool(kwargs['is_live'])
+                if kwargs['is_live']:
+                    self.status[username]['last_seen_live'] = current_time
+            
+            # Update status with all provided fields
             self.status[username].update({
-                'last_updated': datetime.now().isoformat(),
+                'last_updated': current_time,
                 **kwargs
             })
+            
             self._save_status()
 
     def get_user_status(self, username):
         """Get user status with proper boolean values"""
         with self.lock:
-            status = self.status.get(username, {})
+            status = self.status.get(username, {}).copy()
             # Ensure boolean fields are proper Python booleans
             status['is_live'] = bool(status.get('is_live', False))
             status['is_recording'] = bool(status.get('is_recording', False))
+            
+            # Add formatted timestamps
+            try:
+                if 'last_updated' in status:
+                    last_updated = datetime.fromisoformat(status['last_updated'])
+                    status['last_updated_formatted'] = last_updated.strftime('%Y-%m-%d %H:%M:%S')
+                if 'last_seen_live' in status:
+                    last_seen = datetime.fromisoformat(status['last_seen_live'])
+                    status['last_seen_formatted'] = last_seen.strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                pass
+            
             return status
 
     def get_online_users(self):
