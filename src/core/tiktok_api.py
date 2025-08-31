@@ -120,17 +120,17 @@ class TikTokAPI:
             return None
 
     def is_live_and_get_stream_url(self, username):
-        """Check if user is live using multiple methods"""
+        """Check if user is live using direct API check"""
         try:
-            # Method 1: WebCast API
-            url = f"https://webcast.tiktok.com/webcast/room/info/?app_language=en&room_id={username}"
+            # Use TikTok's web API directly
+            url = f"https://www.tiktok.com/api/user/detail/?uniqueId={username}"
             response = self.session.get(url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
-                if data.get('data', {}).get('room', {}).get('status') == 2:
+                if data.get('userInfo', {}).get('user', {}).get('isLive', False):
                     return True, f"https://www.tiktok.com/@{username}/live"
-
-            # Method 2: Room API
+                    
+            # Backup check using room API
             url = f"https://www.tiktok.com/api/live/detail/?aid=1988&uniqueId={username}"
             response = self.session.get(url, timeout=5)
             if response.status_code == 200:
@@ -139,6 +139,7 @@ class TikTokAPI:
                     return True, f"https://www.tiktok.com/@{username}/live"
 
             return False, None
+
         except Exception as e:
             logger.error(f"Error checking live status for {username}: {e}")
             return False, None

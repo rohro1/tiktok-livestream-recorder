@@ -66,63 +66,40 @@ def monitoring_loop():
     while monitoring_active:
         try:
             usernames = load_usernames()
-            
             if not usernames:
-                logger.warning("No usernames to monitor")
-                time.sleep(60)
+                time.sleep(10)
                 continue
-            
+
+            # Check all users in parallel
             for username in usernames:
                 if not monitoring_active:
                     break
-                    
+                
                 try:
-                    # Check if user is live using reliable method
                     is_live = recorder.is_user_live(username)
-                    
-                    # Update last checked time
                     status_tracker.update_user_status(
-                        username, 
+                        username,
                         is_live=is_live,
                         last_check=datetime.now()
                     )
                     
-                    if is_live:
-                        # Only start recording if not already recording
-                        if username not in recording_threads:
-                            logger.info(f"Starting recording for {username}")
-                            thread = threading.Thread(
-                                target=record_user_stream,
-                                args=(username,),
-                                daemon=True
-                            )
-                            thread.start()
-                            recording_threads[username] = thread
-                        else:
-                            logger.debug(f"Already recording {username}")
-                    else:
-                        # User is offline
-                        if username in recording_threads:
-                            logger.info(f"User {username} went offline")
+                    if is_live and username not in recording_threads:
+                        thread = threading.Thread(
+                            target=record_user_stream,
+                            args=(username,),
+                            daemon=True
+                        )
+                        thread.start()
+                        recording_threads[username] = thread
                         
                 except Exception as e:
                     logger.error(f"Error checking {username}: {e}")
-                    # Mark as offline on error
-                    status_tracker.update_user_status(
-                        username, 
-                        is_live=False,
-                        last_check=datetime.now()
-                    )
                     
-                time.sleep(3)  # Delay between users to avoid rate limiting
-                
-            # Wait 45 seconds before next check cycle (longer to be more respectful)
-            logger.debug(f"Monitoring cycle complete. Active recordings: {len(recording_threads)}")
-            time.sleep(45)
+            time.sleep(30)  # Check every 30 seconds
             
         except Exception as e:
             logger.error(f"Error in monitoring loop: {e}")
-            time.sleep(120)  # Wait longer on error
+            time.sleep(60)
 
 def record_user_stream(username):
     """Record a user's livestream"""
@@ -355,8 +332,23 @@ def add_user():
                 if usernames:  # If file not empty, add newline
                     f.write('\n')
                 f.write(username)
+            
+            # Immediately check live status
+            is_live = recorder.is_user_live(username)
+            status_tracker.update_user_status(
+                username,
+                is_live=is_live,
+                last_check=datetime.now()
+            )
+            
+            # Clear username cache to force reload
+            get_cached_usernames.cache_clear()
             logger.info(f"Added new user: {username}")
-        return redirect(url_for('status'))
+            
+        return jsonify({
+            'success': True,
+            'message': f'Added user {username}'
+        })
     except Exception as e:
         logger.error(f"Error adding user: {e}")
         return jsonify({'error': str(e)}), 500

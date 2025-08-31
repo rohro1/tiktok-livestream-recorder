@@ -411,9 +411,8 @@
                 {% endif %}
             </div>
             
-            <form method="POST" action="/add_user" class="control-group" onsubmit="return validateForm()">
-                <input type="text" name="username" id="username" placeholder="Enter TikTok username (without @)" required 
-                       pattern="[A-Za-z0-9_\.-]+" title="Only letters, numbers, dots, underscores and hyphens allowed">
+            <form id="addUserForm" onsubmit="return addUser(event)" class="control-group">
+                <input type="text" name="username" placeholder="Enter TikTok username (without @)" required>
                 <button type="submit" class="btn btn-primary">➕ Add User</button>
             </form>
         </div>
@@ -501,6 +500,37 @@
     </div>
     
     <script>
+        async function addUser(event) {
+            event.preventDefault();
+            const form = event.target;
+            const username = form.username.value;
+            const btn = form.querySelector('button');
+            
+            try {
+                btn.disabled = true;
+                const response = await fetch('/add_user', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `username=${encodeURIComponent(username)}`
+                });
+                
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    const data = await response.json();
+                    alert(data.error || 'Failed to add user');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Failed to add user');
+            } finally {
+                btn.disabled = false;
+            }
+            return false;
+        }
+
         // Auto-refresh functionality
         let refreshTimer = 30;
         const timerElement = document.getElementById('refresh-timer');
