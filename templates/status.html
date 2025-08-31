@@ -354,7 +354,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎥 TikTok Live Monitor</h1>
+            <h1>🎥 TikTok Monitor</h1>
             <p>Monitor and record TikTok live streams automatically</p>
         </div>
         
@@ -374,7 +374,7 @@
         
         <div class="stats">
             <div class="stat-card">
-                <h3 class="live-count">{{ users.values() | selectattr('is_live', true) | list | length }}</h3>
+                <h3 class="live-count">{{ users.values() | selectattr('is_live', 'eq', True) | list | length }}</h3>
                 <p>Users Live</p>
             </div>
             <div class="stat-card">
@@ -382,8 +382,8 @@
                 <p>Total Users</p>
             </div>
             <div class="stat-card">
-                <h3 class="monitoring-count">{{ users.values() | selectattr('recording_status', 'equalto', 'monitoring') | list | length }}</h3>
-                <p>Monitoring</p>
+                <h3 class="monitoring-count">{{ users.values() | selectattr('is_recording', 'eq', True) | list | length }}</h3>
+                <p>Recording</p>
             </div>
         </div>
         
@@ -393,45 +393,31 @@
             <div class="user-card {% if user.is_live %}live{% endif %}">
                 <div class="user-header">
                     <div class="user-info">
-                        <h4>{{ user.username }}</h4>
-                        <a href="https://www.tiktok.com/@{{ user.username }}" target="_blank">@{{ user.username }}</a>
+                        <h4>{{ username }}</h4>
+                        <a href="https://www.tiktok.com/@{{ username }}" target="_blank">@{{ username }}</a>
                     </div>
                     <div class="status-badges">
-                        {% if user.live_status == 'live' %}
+                        {% if user.is_live %}
                         <span class="badge badge-live">● LIVE</span>
-                        {% elif user.live_status == 'offline' %}
+                        {% else %}
                         <span class="badge badge-offline">● Offline</span>
-                        {% elif user.live_status == 'error' %}
-                        <span class="badge badge-error">● Error</span>
                         {% endif %}
                         
-                        {% if user.recording_status == 'recording' %}
+                        {% if user.is_recording %}
                         <span class="badge badge-recording">🔴 Recording</span>
-                        {% elif user.recording_status == 'monitoring' %}
-                        <span class="badge badge-monitoring">👁️ Monitoring</span>
                         {% endif %}
                     </div>
                 </div>
                 
                 <div class="user-details">
                     <div class="detail-item">
-                        <strong>Last Online</strong>
-                        <span>{{ user.last_online_formatted }}</span>
+                        <strong>Last Check</strong>
+                        <span>{{ user.last_check | default('Never', True) }}</span>
                     </div>
+                    {% if user.is_live and user.recording_start %}
                     <div class="detail-item">
-                        <strong>Last Checked</strong>
-                        <span>{{ user.last_checked_formatted }}</span>
-                    </div>
-                    {% if user.live_status == 'live' and user.recording_duration > 0 %}
-                    <div class="detail-item">
-                        <strong class="recording-duration">{{ user.recording_duration_formatted }}</strong>
-                        <span>Recording Time</span>
-                    </div>
-                    {% endif %}
-                    {% if user.error_count > 0 %}
-                    <div class="detail-item">
-                        <strong style="color: #dc2626;">{{ user.error_count }}</strong>
-                        <span>Errors</span>
+                        <strong>Recording Time</strong>
+                        <span>{{ ((now - user.recording_start) | string).split('.')[0] }}</span>
                     </div>
                     {% endif %}
                 </div>

@@ -37,8 +37,13 @@ class StatusTracker:
             self._save_status()
 
     def get_user_status(self, username):
+        """Get user status with proper boolean values"""
         with self.lock:
-            return self.status.get(username, {})
+            status = self.status.get(username, {})
+            # Ensure boolean fields are proper Python booleans
+            status['is_live'] = bool(status.get('is_live', False))
+            status['is_recording'] = bool(status.get('is_recording', False))
+            return status
 
     def get_online_users(self):
         with self.lock:
