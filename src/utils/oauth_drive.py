@@ -14,36 +14,61 @@ logger = logging.getLogger(__name__)
 class DriveOAuth:
     def __init__(self):
         self.scopes = ['https://www.googleapis.com/auth/drive.file']
-        self.creds_config = None
-        self._load_credentials_config()
+        self.credentials_file = '/etc/secrets/credentials.json'
+        self.token_file = 'token.pickle'
+        self.redirect_uri = 'https://tiktok-livestream-recorder.onrender.com/oauth2callback'
 
     def _load_credentials_config(self):
         """Load credentials from Render secret file"""
         try:
-            if os.path.exists('/etc/secrets/credentials.json'):
-                with open('/etc/secrets/credentials.json', 'r') as f:
-                    self.creds_config = json.load(f)
-                    # Ensure redirect URI is set correctly
-                    if 'web' in self.creds_config:
-                        self.creds_config['web']['redirect_uris'] = ['https://tiktok-livestream-recorder.onrender.com/oauth2callback']
-                        self.creds_config['web']['redirect_uri'] = 'https://tiktok-livestream-recorder.onrender.com/oauth2callback'
+            # First try Render secrets path
+            if os.path.exists(self.credentials_file):
+                with open(self.credentials_file, 'r') as f:
+                    config = json.load(f)
+                    logger.info("Loaded credentials from Render secrets")
+                    return config
             else:
-                logger.error("credentials.json not found in /etc/secrets")
+                # Fallback to environment variable
+                creds_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+                if creds_json:
+                    config = json.loads(creds_json)
+                    logger.info("Loaded credentials from environment")
+                    return config
+                
+            logger.error("No credentials found in secrets or environment")
+            return None
         except Exception as e:
-            logger.error(f"Failed to load credentials: {e}")
-            raise
+            logger.error(f"Error loading credentials: {str(e)}")
+            return None
 
     def get_authorization_url(self):
         """Get OAuth URL"""
-        if not self.creds_config:
-            raise Exception("No credentials configuration found")
+        try:
+            creds_config = self._load_credentials_config()
+            if not creds_config:
+                raise Exception("No credentials configuration found")
 
-        flow = InstalledAppFlow.from_client_config(
-            self.creds_config,
-            self.scopes,
-            redirect_uri='https://tiktok-livestream-recorder.onrender.com/oauth2callback'
-        )
-        return flow.authorization_url(access_type='offline', include_granted_scopes='true')[0]
+            # Force our redirect URI
+            if 'web' in creds_config:
+                creds_config['web']['redirect_uris'] = [self.redirect_uri]
+
+            flow = InstalledAppFlow.from_client_config(
+                creds_config,
+                self.scopes,
+                redirect_uri=self.redirect_uri
+            )
+            
+            auth_url, _ = flow.authorization_url(
+                access_type='offline',
+                include_granted_scopes='true',
+                prompt='consent'
+            )
+            logger.info(f"Generated auth URL with redirect: {self.redirect_uri}")
+            return auth_url
+            
+        except Exception as e:
+            logger.error(f"Error generating auth URL: {str(e)}")
+            raise
 
     def handle_callback(self, code):
         """Handle OAuth callback"""
@@ -52,18 +77,20 @@ class DriveOAuth:
             if not creds_config:
                 raise Exception("No credentials configuration found")
 
+            # Force our redirect URI
+            if 'web' in creds_config:
+                creds_config['web']['redirect_uris'] = [self.redirect_uri]
+
             flow = InstalledAppFlow.from_client_config(
                 creds_config,
-                self.scopes
+                self.scopes,
+                redirect_uri=self.redirect_uri
             )
             
-            # Use the same redirect URI as authorization
-            if 'web' in creds_config and 'redirect_uris' in creds_config['web']:
-                flow.redirect_uri = creds_config['web']['redirect_uris'][0]
-            
             flow.fetch_token(code=code)
+            logger.info("Successfully fetched OAuth token")
             return flow.credentials
             
         except Exception as e:
-            logger.error(f"Failed to handle callback: {e}")
+            logger.error(f"Error in callback: {str(e)}")
             return None

@@ -251,14 +251,20 @@ def auth_google():
 def oauth2callback():
     """Handle Google OAuth callback"""
     try:
+        error = request.args.get('error')
+        if error:
+            logger.error(f"OAuth error: {error}")
+            return f"Authorization error: {error}", 400
+
         code = request.args.get('code')
         if not code:
+            logger.error("No authorization code received")
             return "No authorization code received", 400
         
         # Exchange code for credentials
         creds = oauth_helper.handle_callback(code)
         
-        if creds:
+        if creds and creds.valid:
             # Initialize Drive uploader
             global drive_uploader
             drive_uploader = GoogleDriveUploader(creds)
@@ -266,11 +272,12 @@ def oauth2callback():
             logger.info("Google Drive authorization successful")
             return redirect(url_for('status'))
         else:
-            return "Authorization failed", 400
+            logger.error("Failed to obtain valid credentials")
+            return "Authorization failed - invalid credentials", 400
             
     except Exception as e:
-        logger.error(f"Callback error: {e}")
-        return f"Callback error: {e}", 500
+        logger.error(f"OAuth callback error: {str(e)}")
+        return f"Authorization failed: {str(e)}", 400
 
 @app.route('/start_monitoring', methods=['GET', 'POST'])
 def start_monitoring():
