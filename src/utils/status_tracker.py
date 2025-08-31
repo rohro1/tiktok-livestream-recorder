@@ -1,235 +1,168 @@
-"""
-Status Tracker
-Thread-safe tracking of user livestream statuses
-"""
-
-import json
 import threading
-import os
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
+from typing import Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
 
 class StatusTracker:
-    def __init__(self, status_file='status.json'):
-        self.status_file = status_file
-        self.lock = threading.Lock()
-        self.data = self._load_status()
-
-    def _load_status(self):
-        """Load status data from file"""
-        try:
-            if os.path.exists(self.status_file):
-                with open(self.status_file, 'r') as f:
-                    data = json.load(f)
-                logger.info(f"Loaded status data for {len(data)} users")
-                return data
-            else:
-                logger.info("No existing status file, starting fresh")
-                return {}
-        except Exception as e:
-            logger.error(f"Error loading status file: {e}")
-            return {}
-
-    def _save_status(self):
-        """Save status data to file"""
-        try:
-            with open(self.status_file, 'w') as f:
-                json.dump(self.data, f, indent=2, default=str)
-        except Exception as e:
-            logger.error(f"Error saving status file: {e}")
-
-    def update_user_status(self, username, **kwargs):
-        """
-        Update user status with thread safety
+    def __init__(self):
+        self._status = {}
+        self._lock = threading.Lock()
         
-        Args:
-            username (str): TikTok username
-            **kwargs: Status fields to update
-                - is_live (bool): Current live status
-                - last_check (datetime): Last time we checked
-                - recording_start (datetime): When recording started
-                - recording_end (datetime): When recording ended
-                - recording_file (str): Current/last recording file
-                - last_recording (str): Path to last completed recording
-                - drive_link (str): Google Drive link to recording
-        """
-        with self.lock:
-            if username not in self.data:
-                self.data[username] = {
+    def update_status(self, username: str, live_status: str, recording_status: str, 
+                     stream_url: str = None, recording_file: str = None):
+        """Update user status thread-safely"""
+        with self._lock:
+            if username not in self._status:
+                self._status[username] = {
                     'username': username,
-                    'is_live': False,
-                    'last_check': None,
+                    'live_status': 'offline',
+                    'recording_status': 'idle',
                     'last_online': None,
-                    'recording_start': None,
-                    'recording_end': None,
+                    'recording_started': None,
+                    'recording_duration': 0,
+                    'stream_url': None,
                     'recording_file': None,
-                    'last_recording': None,
-                    'drive_link': None,
-                    'total_recordings': 0,
-                    'last_duration': 0
+                    'last_checked': datetime.now(),
+                    'error_count': 0
                 }
-
-            user_data = self.data[username]
             
-            # Update provided fields
-            for key, value in kwargs.items():
-                if key in user_data:
-                    user_data[key] = value
-
-            # Special logic for certain updates
-            if 'is_live' in kwargs:
-                if kwargs['is_live']:
-                    user_data['last_online'] = datetime.now()
-                
-            if 'recording_end' in kwargs:
-                user_data['total_recordings'] += 1
-                
-                # Calculate duration if we have start and end times
-                if user_data['recording_start'] and kwargs['recording_end']:
-                    try:
-                        start_time = datetime.fromisoformat(str(user_data['recording_start']).replace('Z', '+00:00'))
-                        end_time = datetime.fromisoformat(str(kwargs['recording_end']).replace('Z', '+00:00'))
-                        duration = (end_time - start_time).total_seconds()
-                        user_data['last_duration'] = duration
-                    except Exception as e:
-                        logger.debug(f"Could not calculate duration for {username}: {e}")
-
-            # Save to file
-            self._save_status()
+            # Update status
+            old_status = self._status[username]['live_status']
+            self._status[username]['live_status'] = live_status
+            self._status[username]['recording_status'] = recording_status
+            self._status[username]['last_checked'] = datetime.now()
             
-            logger.debug(f"Updated status for {username}: {kwargs}")
-
-    def get_user_status(self, username):
-        """Get status for a specific user"""
-        with self.lock:
-            if username in self.data:
-                return self.data[username].copy()
+            # Update last online time
+            if live_status == 'live':
+                if old_status != 'live':
+                    self._status[username]['last_online'] = datetime.now()
+                    self._status[username]['recording_started'] = datetime.now()
+                    logger.info(f"{username} went live at {self._status[username]['last_online']}")
+                
+                # Update recording duration for live users
+                if self._status[username]['recording_started']:
+                    duration = datetime.now() - self._status[username]['recording_started']
+                    self._status[username]['recording_duration'] = int(duration.total_seconds())
+            
+            elif live_status == 'offline' and old_status == 'live':
+                # User went offline
+                self._status[username]['recording_started'] = None
+                self._status[username]['recording_duration'] = 0
+                logger.info(f"{username} went offline")
+            
+            # Update stream info
+            if stream_url:
+                self._status[username]['stream_url'] = stream_url
+            if recording_file:
+                self._status[username]['recording_file'] = recording_file
+                
+            # Reset error count on successful update
+            if live_status != 'error':
+                self._status[username]['error_count'] = 0
             else:
+                self._status[username]['error_count'] += 1
+    
+    def get_status(self, username: str) -> Dict[str, Any]:
+        """Get status for a specific user"""
+        with self._lock:
+            if username not in self._status:
                 return {
                     'username': username,
-                    'is_live': False,
-                    'last_check': None,
+                    'live_status': 'unknown',
+                    'recording_status': 'idle',
                     'last_online': None,
-                    'recording_start': None,
-                    'recording_end': None,
+                    'recording_started': None,
+                    'recording_duration': 0,
+                    'stream_url': None,
                     'recording_file': None,
-                    'last_recording': None,
-                    'drive_link': None,
-                    'total_recordings': 0,
-                    'last_duration': 0
+                    'last_checked': None,
+                    'error_count': 0
                 }
-
-    def get_all_statuses(self):
+            
+            status = self._status[username].copy()
+            
+            # Update recording duration for currently live users
+            if status['live_status'] == 'live' and status['recording_started']:
+                duration = datetime.now() - status['recording_started']
+                status['recording_duration'] = int(duration.total_seconds())
+            
+            # Format timestamps for display
+            if status['last_online']:
+                status['last_online_formatted'] = status['last_online'].strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                status['last_online_formatted'] = 'Never'
+            
+            if status['last_checked']:
+                status['last_checked_formatted'] = status['last_checked'].strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                status['last_checked_formatted'] = 'Never'
+            
+            # Format recording duration
+            if status['recording_duration'] > 0:
+                hours = status['recording_duration'] // 3600
+                minutes = (status['recording_duration'] % 3600) // 60
+                seconds = status['recording_duration'] % 60
+                status['recording_duration_formatted'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                status['recording_duration_formatted'] = "00:00:00"
+            
+            return status
+    
+    def get_all_status(self) -> Dict[str, Dict[str, Any]]:
         """Get status for all users"""
-        with self.lock:
-            return self.data.copy()
-
-    def get_live_users(self):
+        with self._lock:
+            result = {}
+            for username in self._status:
+                result[username] = self.get_status(username)
+            return result
+    
+    def remove_user(self, username: str):
+        """Remove a user from tracking"""
+        with self._lock:
+            if username in self._status:
+                del self._status[username]
+                logger.info(f"Removed {username} from status tracking")
+    
+    def get_live_users(self) -> list:
         """Get list of currently live users"""
-        with self.lock:
+        with self._lock:
             live_users = []
-            for username, data in self.data.items():
-                if data.get('is_live', False):
+            for username, status in self._status.items():
+                if status['live_status'] == 'live':
                     live_users.append(username)
             return live_users
-
-    def get_recording_users(self):
-        """Get list of users currently being recorded"""
-        with self.lock:
-            recording_users = []
-            for username, data in self.data.items():
-                if (data.get('recording_start') and 
-                    not data.get('recording_end')):
-                    recording_users.append(username)
-            return recording_users
-
-    def cleanup_old_data(self, days=30):
-        """Remove old status data for users not seen in X days"""
-        with self.lock:
-            cutoff_time = datetime.now().timestamp() - (days * 24 * 3600)
-            users_to_remove = []
+    
+    def cleanup_old_entries(self, max_age_hours: int = 24):
+        """Remove old entries that haven't been updated recently"""
+        with self._lock:
+            cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
+            to_remove = []
             
-            for username, data in self.data.items():
-                last_check = data.get('last_check')
-                if last_check:
-                    try:
-                        if isinstance(last_check, str):
-                            check_time = datetime.fromisoformat(last_check.replace('Z', '+00:00'))
-                        else:
-                            check_time = last_check
-                        
-                        if check_time.timestamp() < cutoff_time:
-                            users_to_remove.append(username)
-                    except Exception:
-                        # If we can't parse the time, remove it
-                        users_to_remove.append(username)
-
-            # Remove old users
-            for username in users_to_remove:
-                del self.data[username]
-                logger.info(f"Removed old status data for {username}")
-
-            if users_to_remove:
-                self._save_status()
-                logger.info(f"Cleaned up status data for {len(users_to_remove)} users")
-
-            return len(users_to_remove)
-
-    def get_stats(self):
-        """Get overall statistics"""
-        with self.lock:
-            total_users = len(self.data)
-            live_users = len(self.get_live_users())
-            recording_users = len(self.get_recording_users())
-            total_recordings = sum(data.get('total_recordings', 0) for data in self.data.values())
+            for username, status in self._status.items():
+                if status['last_checked'] and status['last_checked'] < cutoff_time:
+                    to_remove.append(username)
             
-            return {
-                'total_users': total_users,
-                'live_users': live_users,
-                'recording_users': recording_users,
-                'total_recordings': total_recordings
-            }
-
-    def export_data(self, file_path=None):
-        """Export status data to a file"""
-        if not file_path:
-            file_path = f"status_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        with self.lock:
-            try:
-                with open(file_path, 'w') as f:
-                    json.dump(self.data, f, indent=2, default=str)
-                logger.info(f"Exported status data to {file_path}")
-                return file_path
-            except Exception as e:
-                logger.error(f"Error exporting data: {e}")
-                return None
-
-    def import_data(self, file_path):
-        """Import status data from a file"""
-        try:
-            with open(file_path, 'r') as f:
-                imported_data = json.load(f)
+            for username in to_remove:
+                del self._status[username]
+                logger.info(f"Cleaned up old entry for {username}")
+    
+    def mark_error(self, username: str, error_message: str):
+        """Mark a user as having an error"""
+        self.update_status(username, 'error', f'Error: {error_message[:100]}')
+    
+    def is_being_monitored(self, username: str) -> bool:
+        """Check if a user is currently being monitored"""
+        with self._lock:
+            if username not in self._status:
+                return False
             
-            with self.lock:
-                # Merge with existing data
-                for username, data in imported_data.items():
-                    if username not in self.data:
-                        self.data[username] = data
-                    else:
-                        # Keep more recent data
-                        existing_check = self.data[username].get('last_check')
-                        imported_check = data.get('last_check')
-                        
-                        if imported_check and (not existing_check or imported_check > existing_check):
-                            self.data[username] = data
-
-                self._save_status()
-                logger.info(f"Imported status data from {file_path}")
-                return True
-                
-        except Exception as e:
-            logger.error(f"Error importing data: {e}")
+            # Consider a user monitored if checked within last 2 minutes
+            last_checked = self._status[username]['last_checked']
+            if last_checked:
+                time_diff = datetime.now() - last_checked
+                return time_diff.total_seconds() < 120
+            
             return False
