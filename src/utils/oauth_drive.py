@@ -68,19 +68,30 @@ class DriveOAuth:
             str: Authorization URL
         """
         try:
-            # Load client configuration
-            if not os.path.exists(self.credentials_file):
-                # Try environment variable for Render
-                credentials_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
-                if credentials_json:
-                    with open(self.credentials_file, 'w') as f:
-                        f.write(credentials_json)
-                else:
-                    raise FileNotFoundError("No credentials.json found and GOOGLE_CREDENTIALS_JSON not set")
+            # Load client configuration from environment or file
+            client_config = None
+            
+            # Try environment variable first (for Render)
+            credentials_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+            if credentials_json:
+                try:
+                    client_config = json.loads(credentials_json)
+                    logger.info("Loaded credentials from environment variable")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON in GOOGLE_CREDENTIALS_JSON: {e}")
+            
+            # Fallback to file
+            if not client_config and os.path.exists(self.credentials_file):
+                with open(self.credentials_file, 'r') as f:
+                    client_config = json.load(f)
+                logger.info("Loaded credentials from file")
+            
+            if not client_config:
+                raise FileNotFoundError("No credentials found in environment or file")
 
-            # Create flow
-            flow = Flow.from_client_secrets_file(
-                self.credentials_file,
+            # Create flow from client config
+            flow = Flow.from_client_config(
+                client_config,
                 scopes=self.scopes,
                 redirect_uri=self.redirect_uri
             )

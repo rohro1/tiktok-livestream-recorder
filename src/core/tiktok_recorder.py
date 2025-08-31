@@ -33,25 +33,29 @@ class TikTokRecorder:
 
     def get_tiktok_live_url(self, username):
         """
-        Get TikTok live stream URL using multiple methods
+        Get TikTok live stream URL - only returns URL if user is actually live
         Returns None if user is not live
         """
         try:
-            # Method 1: Direct TikTok live URL check
             live_url = f"https://www.tiktok.com/@{username}/live"
             
-            # Use yt-dlp to extract stream info
+            # Use yt-dlp to extract stream info - this is the most reliable method
             with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
                 try:
                     info = ydl.extract_info(live_url, download=False)
-                    if info and 'url' in info:
+                    if info and info.get('is_live', False) and 'url' in info:
                         logger.info(f"Found live stream for {username}")
                         return info['url']
+                except yt_dlp.DownloadError as e:
+                    if "not currently live" in str(e).lower():
+                        logger.debug(f"User {username} is not live")
+                        return None
+                    else:
+                        logger.debug(f"yt-dlp error for {username}: {e}")
                 except Exception as e:
                     logger.debug(f"yt-dlp extraction failed for {username}: {e}")
             
-            # Method 2: Try alternative approach with requests
-            return self._check_live_status_alternative(username)
+            return None
             
         except Exception as e:
             logger.error(f"Error getting live URL for {username}: {e}")
@@ -64,15 +68,38 @@ class TikTokRecorder:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
             
-            # Check the user's profile page
-            profile_url = f"https://www.tiktok.com/@{username}"
-            response = requests.get(profile_url, headers=headers, timeout=10)
+            # Try to get the live stream URL directly with yt-dlp
+            live_url = f"https://www.tiktok.com/@{username}/live"
             
-            if response.status_code == 200:
-                # Look for live indicators in the page
-                if 'LIVE' in response.text or 'live_status' in response.text:
-                    logger.info(f"User {username} appears to be live (alternative check)")
-                    return f"https://www.tiktok.com/@{username}/live"
+            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                try:
+                    # Try to extract info - this will fail if not live
+                    info = ydl.extract_info(live_url, download=False)
+                    if info and info.get('is_live', False):
+                        logger.info(f"User {username} confirmed live via yt-dlp")
+                        return live_url
+                except yt_dlp.DownloadError as e:
+                    if "not currently live" in str(e).lower():
+                        logger.debug(f"User {username} is not live")
+                        return None
+                except Exception:
+                    pass
+            
+            # If yt-dlp fails, try web scraping as backup
+            try:
+                profile_url = f"https://www.tiktok.com/@{username}"
+                response = requests.get(profile_url, headers=headers, timeout=5)
+                
+                if response.status_code == 200:
+                    # Look for specific live indicators - be more strict
+                    content = response.text.lower()
+                    if ('"is_live":true' in content or 
+                        'live_status":1' in content or
+                        'room_id' in content and 'live' in content):
+                        logger.info(f"User {username} appears live via web check")
+                        return live_url
+            except Exception as e:
+                logger.debug(f"Web check failed for {username}: {e}")
             
             return None
             
@@ -86,8 +113,25 @@ class TikTokRecorder:
         Returns True if live, False otherwise
         """
         try:
-            live_url = self.get_tiktok_live_url(username)
-            return live_url is not None
+            # Use yt-dlp as primary method - it's most reliable
+            live_url = f"https://www.tiktok.com/@{username}/live"
+            
+            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                try:
+                    info = ydl.extract_info(live_url, download=False)
+                    if info and info.get('is_live', False):
+                        logger.debug(f"User {username} is live")
+                        return True
+                except yt_dlp.DownloadError as e:
+                    if "not currently live" in str(e).lower():
+                        logger.debug(f"User {username} is not live")
+                        return False
+                except Exception as e:
+                    logger.debug(f"yt-dlp check failed for {username}: {e}")
+            
+            # Don't use alternative method as it's unreliable
+            return False
+            
         except Exception as e:
             logger.error(f"Error checking live status for {username}: {e}")
             return False
@@ -98,10 +142,10 @@ class TikTokRecorder:
         Returns the output file path if successful, None otherwise
         """
         try:
-            # Get live stream URL
+            # Get live stream URL - this also verifies user is live
             stream_url = self.get_tiktok_live_url(username)
             if not stream_url:
-                logger.error(f"No live stream found for {username}")
+                logger.warning(f"No live stream found for {username}")
                 return None
 
             # Generate output filename
@@ -122,49 +166,66 @@ class TikTokRecorder:
                     recording_file=output_file
                 )
 
-            # Start recording using yt-dlp
-            success = self._record_with_ytdlp(stream_url, output_file, username)
+            # Try recording with yt-dlp first
+            success = self._record_with_ytdlp(username, output_file)
             
             if success and os.path.exists(output_file):
                 logger.info(f"Recording completed: {output_file}")
-                
-                # Update status
-                if self.status_tracker:
-                    self.status_tracker.update_user_status(
-                        username,
-                        is_live=False,
-                        recording_end=datetime.now(),
-                        last_recording=output_file
-                    )
-                
                 return output_file
             else:
                 logger.error(f"Recording failed for {username}")
+                # Clean up failed file
+                if os.path.exists(output_file):
+                    try:
+                        os.remove(output_file)
+                    except Exception:
+                        pass
                 return None
 
         except Exception as e:
             logger.error(f"Error recording stream for {username}: {e}")
             return None
 
-    def _record_with_ytdlp(self, stream_url, output_file, username):
-        """Record using yt-dlp"""
+    def _record_with_ytdlp(self, username, output_file):
+        """Record using yt-dlp directly with username"""
         try:
+            live_url = f"https://www.tiktok.com/@{username}/live"
+            
             ydl_opts = {
-                **self.ydl_opts,
-                'outtmpl': output_file,
                 'format': 'best[height<=480]/best',  # Prefer 480p
+                'outtmpl': output_file,
+                'live_from_start': True,
+                'wait_for_video': (1, 60),  # Wait up to 60 seconds for stream
+                'no_warnings': True,
+                'quiet': False,  # Enable some output for debugging
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Start recording
-                ydl.download([stream_url])
+                logger.info(f"Starting yt-dlp recording for {username}")
+                ydl.download([live_url])
             
-            return True
+            # Check if file was created and has content
+            if os.path.exists(output_file):
+                file_size = os.path.getsize(output_file)
+                if file_size > 100000:  # At least 100KB
+                    logger.info(f"yt-dlp recording successful for {username}: {file_size} bytes")
+                    return True
+                else:
+                    logger.warning(f"yt-dlp created small file for {username}: {file_size} bytes")
+                    return False
+            else:
+                logger.error(f"yt-dlp did not create output file for {username}")
+                return False
             
+        except yt_dlp.DownloadError as e:
+            if "not currently live" in str(e).lower():
+                logger.info(f"User {username} is not live (yt-dlp confirmed)")
+            else:
+                logger.error(f"yt-dlp download error for {username}: {e}")
+            return False
         except Exception as e:
             logger.error(f"yt-dlp recording failed for {username}: {e}")
-            # Fallback to ffmpeg if yt-dlp fails
-            return self._record_with_ffmpeg(stream_url, output_file, username)
+            return False
 
     def _record_with_ffmpeg(self, stream_url, output_file, username):
         """Fallback recording using ffmpeg directly"""
