@@ -25,8 +25,8 @@ class DriveOAuth:
         self.token_file = token_file
         self.scopes = ['https://www.googleapis.com/auth/drive.file']
         
-        # For Render deployment
-        self.redirect_uri = os.environ.get('OAUTH_REDIRECT_URI', 'http://localhost:8000/auth/callback')
+        # Fixed redirect URI to match Google Cloud Console setting
+        self.redirect_uri = 'https://tiktok-livestream-recorder.onrender.com/oauth2callback'
 
     def load_credentials(self):
         """
@@ -63,13 +63,10 @@ class DriveOAuth:
     def _load_credentials_config(self):
         """Load credentials from Render secret file"""
         try:
-            # Check if we're on Render (look for credentials in /etc/secrets)
-            if os.path.exists('/etc/secrets/credentials.json'):
-                with open('/etc/secrets/credentials.json', 'r') as f:
-                    return json.load(f)
-            # Fallback to local file for development
-            elif os.path.exists('credentials.json'):
-                with open('credentials.json', 'r') as f:
+            # Check for credentials in Render secrets path
+            secret_path = '/etc/secrets/credentials.json'
+            if os.path.exists(secret_path):
+                with open(secret_path, 'r') as f:
                     return json.load(f)
         except Exception as e:
             logger.error(f"Failed to load credentials: {e}")
@@ -82,8 +79,9 @@ class DriveOAuth:
             if not creds_config:
                 raise Exception("No credentials configuration found")
 
+            # Force the correct redirect URI
             flow = InstalledAppFlow.from_client_config(
-                creds_config, 
+                creds_config,
                 self.scopes,
                 redirect_uri=self.redirect_uri
             )
@@ -105,15 +103,12 @@ class DriveOAuth:
             creds_config = self._load_credentials_config()
             if not creds_config:
                 raise Exception("No credentials configuration found")
-                
+
             flow = InstalledAppFlow.from_client_config(
                 creds_config,
-                self.scopes
+                self.scopes,
+                redirect_uri=self.redirect_uri
             )
-            
-            # Use same redirect URI as authorization
-            callback_uri = os.environ.get('OAUTH_REDIRECT_URI', 'http://localhost:8000/auth/callback')
-            flow.redirect_uri = callback_uri
             
             flow.fetch_token(code=code)
             return flow.credentials

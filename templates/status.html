@@ -349,6 +349,27 @@
                 grid-template-columns: 1fr;
             }
         }
+        
+        .username-link {
+            color: #333;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+        
+        .username-link:hover {
+            color: #667eea;
+            text-decoration: underline;
+        }
+        
+        .live-link {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+        
+        .live-link:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -393,8 +414,14 @@
             <div class="user-card {% if user.is_live %}live{% endif %}">
                 <div class="user-header">
                     <div class="user-info">
-                        <h4>{{ username }}</h4>
-                        <a href="https://www.tiktok.com/@{{ username }}" target="_blank">@{{ username }}</a>
+                        <h4>
+                            <a href="https://www.tiktok.com/@{{ username }}" target="_blank" class="username-link">
+                                {{ username }}
+                            </a>
+                        </h4>
+                        <a href="https://www.tiktok.com/@{{ username }}/live" target="_blank" class="live-link">
+                            @{{ username }}
+                        </a>
                     </div>
                     <div class="status-badges">
                         {% if user.is_live %}
