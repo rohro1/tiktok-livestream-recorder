@@ -14,16 +14,31 @@ class StatusTracker:
             with self.lock:
                 if os.path.exists(self.status_file):
                     with open(self.status_file, 'r') as f:
-                        self.status = json.load(f)
+                        data = json.load(f)
+                        self.status = data.get('statuses', {})
+                        self.last_checks = {
+                            k: datetime.fromisoformat(v) 
+                            for k, v in data.get('last_checks', {}).items()
+                        }
                 else:
-                    self.status = {}
-        except Exception:
+                    self._save_status()
+        except Exception as e:
+            print(f"Error initializing status file: {e}")
             self.status = {}
+            self.last_checks = {}
+            self._save_status()
 
     def _save_status(self):
         with self.lock:
+            data = {
+                'statuses': self.status,
+                'last_checks': {
+                    k: v.isoformat() 
+                    for k, v in self.last_checks.items()
+                }
+            }
             with open(self.status_file, 'w') as f:
-                json.dump(self.status, f, indent=2)
+                json.dump(data, f)
 
     def update_user_status(self, username, **kwargs):
         with self.lock:
@@ -45,6 +60,7 @@ class StatusTracker:
                 **kwargs
             })
             
+            self.last_checks[username] = datetime.now()
             self._save_status()
 
     def get_user_status(self, username):

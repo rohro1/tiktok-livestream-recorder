@@ -194,35 +194,41 @@ def home():
 @app.route('/status')
 def status():
     """Main dashboard showing user statuses"""
-    usernames = get_cached_usernames(int(time.time() / 5))
-    user_statuses = {}
-    
-    # Check statuses if needed or requested
-    force_refresh = request.args.get('refresh', '').lower() == 'true'
-    if force_refresh or not status_tracker.has_recent_checks():
+    try:
+        usernames = get_cached_usernames(int(time.time() / 5))
+        user_statuses = {}
+        
+        # Force refresh or check if needed
+        force_refresh = request.args.get('refresh', '').lower() == 'true'
+        if force_refresh or not status_tracker.has_recent_checks():
+            logger.info("Checking live status for all users...")
+            for username in usernames:
+                try:
+                    is_live = recorder.is_user_live(username)
+                    status_tracker.update_user_status(
+                        username,
+                        is_live=is_live,
+                        last_check=datetime.now().isoformat()
+                    )
+                except Exception as e:
+                    logger.error(f"Error checking {username}: {e}")
+                    continue
+        
+        # Get current statuses
         for username in usernames:
-            try:
-                is_live = recorder.is_user_live(username)
-                status_tracker.update_user_status(
-                    username,
-                    is_live=is_live,
-                    last_check=datetime.now().isoformat()
-                )
-            except Exception as e:
-                logger.error(f"Error checking {username}: {e}")
-    
-    # Get current statuses
-    for username in usernames:
-        user_data = status_tracker.get_user_status(username)
-        user_data['username'] = username
-        user_data['is_recording'] = username in recording_threads
-        user_statuses[username] = user_data
-    
-    return render_template('status.html', 
-                         users=user_statuses, 
-                         monitoring_active=monitoring_active,
-                         drive_authorized=bool(drive_uploader),
-                         now=datetime.now())
+            user_data = status_tracker.get_user_status(username) or {}
+            user_data['username'] = username
+            user_data['is_recording'] = username in recording_threads
+            user_statuses[username] = user_data
+        
+        return render_template('status.html', 
+                             users=user_statuses, 
+                             monitoring_active=monitoring_active,
+                             drive_authorized=bool(drive_uploader),
+                             now=datetime.now())
+    except Exception as e:
+        logger.error(f"Error in status page: {e}")
+        return f"Error loading status page: {str(e)}", 500
 
 @app.route('/api/status')
 def api_status():
