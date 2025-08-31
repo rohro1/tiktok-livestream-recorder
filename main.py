@@ -198,15 +198,15 @@ def status():
     user_statuses = {}
     
     # Check statuses if needed or requested
-    need_check = not status_tracker.has_recent_checks() or request.args.get('refresh')
-    if need_check:
+    force_refresh = request.args.get('refresh', '').lower() == 'true'
+    if force_refresh or not status_tracker.has_recent_checks():
         for username in usernames:
             try:
                 is_live = recorder.is_user_live(username)
                 status_tracker.update_user_status(
                     username,
                     is_live=is_live,
-                    last_check=datetime.now()
+                    last_check=datetime.now().isoformat()
                 )
             except Exception as e:
                 logger.error(f"Error checking {username}: {e}")

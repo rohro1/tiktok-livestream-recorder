@@ -75,14 +75,15 @@ class StatusTracker:
 
     def has_recent_checks(self, max_age_seconds=300):  # 5 minutes
         """Check if we have recent status checks"""
-        if not self.lock:
-            return False
-            
-        now = datetime.now()
-        for last_check in self.lock.values():
-            if (now - last_check).total_seconds() < max_age_seconds:
-                return True
-        return False
+        with self.lock:
+            if not self.last_checks:
+                return False
+            now = datetime.now().timestamp()
+            return any(
+                (now - timestamp) < max_age_seconds 
+                for timestamp in self.last_checks.values()
+            )
 
     def get_all_statuses(self):
-        return self.status
+        with self.lock:
+            return self.status.copy()
