@@ -391,7 +391,6 @@ if __name__ == '__main__':
     os.makedirs('recordings', exist_ok=True)
     os.makedirs('logs', exist_ok=True)
     
-    # Load existing credentials if available
     try:
         creds = oauth_helper.load_credentials()
         if creds and creds.valid:
@@ -400,7 +399,13 @@ if __name__ == '__main__':
     except Exception as e:
         logger.warning(f"Could not load existing credentials: {e}")
     
-    # Run Flask app with correct port for Render
-    port = int(os.environ.get('PORT', '10000'))
+    # Get port from environment variable for Render compatibility
+    port = int(os.environ.get('PORT', 10000))
     logger.info(f"Starting server on port {port}")
-    app.run(host='0.0.0.0', port=port)
+    
+    if os.environ.get('RENDER'):
+        # Running on Render
+        app.run(host='0.0.0.0', port=port)
+    else:
+        # Local development
+        app.run(host='0.0.0.0', port=port, debug=True)
