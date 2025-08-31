@@ -398,14 +398,14 @@ if __name__ == '__main__':
             logger.info("Loaded existing Google Drive credentials")
     except Exception as e:
         logger.warning(f"Could not load existing credentials: {e}")
-    
-    # Get port from environment variable for Render compatibility
+
+    # Get port from environment variable
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"Starting server on port {port}")
+    host = '0.0.0.0'
+    
+    logger.info(f"Starting server on {host}:{port}")
     
     if os.environ.get('RENDER'):
-        # Running on Render
-        app.run(host='0.0.0.0', port=port)
+        app.run(host=host, port=port)
     else:
-        # Local development
-        app.run(host='0.0.0.0', port=port, debug=True)
+        app.run(host=host, port=port, debug=True)
