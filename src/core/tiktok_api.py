@@ -5,6 +5,7 @@ import logging
 import shlex
 import re
 import requests
+import yt_dlp
 from typing import Tuple
 
 logger = logging.getLogger("tiktok_api")
@@ -13,6 +14,9 @@ class TikTokAPI:
     def __init__(self, username: str):
         self.username = username
         self.page_url = f"https://www.tiktok.com/@{username}"
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
 
     def _run_ytdlp_json(self, url: str):
         cmd = ["yt-dlp", "-j", url]
@@ -32,11 +36,7 @@ class TikTokAPI:
         Returns (is_live, possible_stream_url_or_none)
         """
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-            r = requests.get(self.page_url, headers=headers, timeout=10)
+            r = requests.get(self.page_url, headers=self.headers, timeout=10)
             text = r.text
             # look for simple flags
             if re.search(r'\b"isLive"\s*:\s*true', text) or re.search(r'\b"live"\s*:\s*true', text, re.I):
@@ -89,6 +89,18 @@ class TikTokAPI:
                 # might show live page
                 return True, None
         except Exception:
+            pass
+
+        # Try direct API
+        try:
+            api_url = f"https://www.tiktok.com/api/live/detail/?aid=1988&uniqueId={self.username}"
+            response = requests.get(api_url, headers=self.headers)
+            if response.status_code == 200:
+                data = response.json()
+                room_info = data.get('LiveRoomInfo', {})
+                if room_info.get('status') == 2:  # 2 means live
+                    return True, f"https://www.tiktok.com/@{self.username}/live"
+        except:
             pass
 
         return False, None

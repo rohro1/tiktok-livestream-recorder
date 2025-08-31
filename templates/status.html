@@ -370,6 +370,18 @@
         .live-link:hover {
             text-decoration: underline;
         }
+        
+        .user-links {
+            margin-top: 5px;
+            font-size: 0.8rem;
+        }
+        .user-links a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .user-links a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -415,13 +427,14 @@
                 <div class="user-header">
                     <div class="user-info">
                         <h4>
-                            <a href="https://www.tiktok.com/@{{ username }}" target="_blank" class="username-link">
+                            <a href="https://www.tiktok.com/@{{ username }}" target="_blank" class="username-link" style="color: #333; text-decoration: underline;">
                                 {{ username }}
                             </a>
                         </h4>
-                        <a href="https://www.tiktok.com/@{{ username }}/live" target="_blank" class="live-link">
-                            @{{ username }}
-                        </a>
+                        <div class="user-links">
+                            <a href="https://www.tiktok.com/@{{ username }}" target="_blank">Profile</a> |
+                            <a href="https://www.tiktok.com/@{{ username }}/live" target="_blank">Live Page</a>
+                        </div>
                     </div>
                     <div class="status-badges">
                         {% if user.is_live %}
