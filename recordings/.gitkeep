@@ -1,0 +1,3 @@
+
+# This file ensures the recordings directory is tracked by git
+# Actual recording files are ignored but the directory structure is preserved

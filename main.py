@@ -51,72 +51,90 @@ class TikTokChecker:
         })
     
     def is_live(self, username):
-        """Enhanced live detection using multiple methods"""
+        """Enhanced live detection with multiple fallback methods"""
         try:
-            # Method 1: Check TikTok profile API endpoint
-            api_url = f"https://www.tiktok.com/api/user/detail/?uniqueId={username}"
+            logger.info(f"🔍 Checking live status for @{username}")
+            
+            # Method 1: TikTok Live API endpoint
             try:
-                response = self.session.get(api_url, timeout=15)
+                api_url = f"https://www.tiktok.com/api/live/detail/?roomId=@{username}"
+                response = self.session.get(api_url, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
-                    if data.get('userInfo', {}).get('user', {}).get('liveRoom'):
-                        logger.info(f"✅ API confirms {username} is LIVE")
+                    if data.get('LiveRoomInfo', {}).get('status') == 2:
+                        logger.info(f"✅ API Method: {username} is LIVE!")
                         return True
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"API method failed for {username}: {e}")
             
-            # Method 2: Check profile page for live indicators
-            profile_url = f"https://www.tiktok.com/@{username}"
-            response = self.session.get(profile_url, timeout=15)
+            # Method 2: Profile page scraping
+            try:
+                profile_url = f"https://www.tiktok.com/@{username}"
+                response = self.session.get(profile_url, timeout=15)
+                
+                if response.status_code == 200:
+                    content = response.text.lower()
+                    
+                    # Enhanced live detection patterns
+                    live_indicators = [
+                        '"is_live":true',
+                        '"live_status":1',
+                        '"user_live_status":1',
+                        'liveroom',
+                        '"room_id"',
+                        'live_stream',
+                        'broadcasting',
+                        '"live":true'
+                    ]
+                    
+                    for indicator in live_indicators:
+                        if indicator in content:
+                            logger.info(f"✅ Profile Method: {username} is LIVE! (Found: {indicator})")
+                            return True
+            except Exception as e:
+                logger.debug(f"Profile scraping failed for {username}: {e}")
             
-            if response.status_code == 200:
-                content = response.text.lower()
-                
-                # Enhanced live detection patterns
-                live_patterns = [
-                    r'"is_live"\s*:\s*true',
-                    r'"live_status"\s*:\s*1',
-                    r'"user_live_status"\s*:\s*1',
-                    r'live.*room',
-                    r'liveroom',
-                    r'"room_id"',
-                    r'live.*stream',
-                    r'broadcasting.*live'
-                ]
-                
-                for pattern in live_patterns:
-                    if re.search(pattern, content):
-                        logger.info(f"✅ Pattern match for {username}: {pattern}")
-                        return True
-                
-                # Check for live room data structure
-                if '"liveRoom":' in content and '"liveRoomId":' in content:
-                    logger.info(f"✅ Live room structure found for {username}")
-                    return True
-            
-            # Method 3: Try to extract live stream URL
+            # Method 3: yt-dlp verification
             try:
                 live_url = f"https://www.tiktok.com/@{username}/live"
                 ydl_opts = {
                     'quiet': True,
                     'no_warnings': True,
-                    'extract_flat': False,
+                    'extract_flat': True,
                     'skip_download': True,
-                    'no_check_certificate': True
+                    'no_check_certificate': True,
+                    'socket_timeout': 10
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(live_url, download=False)
-                    if info and (info.get('is_live') or info.get('formats')):
-                        logger.info(f"✅ yt-dlp confirms {username} is live")
+                    try:
+                        info = ydl.extract_info(live_url, download=False)
+                        if info and (info.get('is_live') or info.get('live_status') == 'is_live'):
+                            logger.info(f"✅ yt-dlp Method: {username} is LIVE!")
+                            return True
+                    except yt_dlp.DownloadError:
+                        pass  # User likely not live
+            except Exception as e:
+                logger.debug(f"yt-dlp method failed for {username}: {e}")
+            
+            # Method 4: Alternative API check
+            try:
+                alt_url = f"https://www.tiktok.com/node/share/user/@{username}"
+                response = self.session.get(alt_url, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    user_info = data.get('seoProps', {}).get('metaParams', {})
+                    if user_info.get('live_status') == '1':
+                        logger.info(f"✅ Alternative API: {username} is LIVE!")
                         return True
             except Exception as e:
-                logger.debug(f"yt-dlp check failed for {username}: {e}")
+                logger.debug(f"Alternative API failed for {username}: {e}")
             
+            logger.debug(f"⚪ {username} is not live")
             return False
             
         except Exception as e:
-            logger.error(f"Error checking live status for {username}: {e}")
+            logger.error(f"❌ Error checking live status for {username}: {e}")
             return False
 
 class StreamRecorder:
@@ -136,20 +154,21 @@ class StreamRecorder:
             
             # Enhanced yt-dlp options for better compatibility
             ydl_opts = {
-                'format': 'best[height<=480]/best',
+                'format': 'best[height<=720]/best',
                 'outtmpl': output_file,
-                'no_warnings': True,
+                'no_warnings': False,
                 'extractaudio': False,
-                'audioformat': "mp3",
                 'embed_subs': False,
                 'writesubtitles': False,
                 'writeautomaticsub': False,
-                'ignoreerrors': True,
+                'ignoreerrors': False,
                 'no_check_certificate': True,
                 'prefer_ffmpeg': True,
                 'hls_prefer_native': True,
                 'live_from_start': True,
-                'wait_for_video': (1, 30)
+                'wait_for_video': (5, 60),
+                'fragment_retries': 10,
+                'retry_sleep_functions': {'http': lambda n: 2 * n}
             }
             
             logger.info(f"🎬 Starting recording for {username}")
@@ -159,11 +178,11 @@ class StreamRecorder:
                     ydl.download([live_url])
                     
                     # Check if file was created successfully
-                    if os.path.exists(output_file) and os.path.getsize(output_file) > 1024:  # At least 1KB
+                    if os.path.exists(output_file) and os.path.getsize(output_file) > 10240:  # At least 10KB
                         logger.info(f"✅ Recording completed: {output_file}")
                         return output_file
                     else:
-                        logger.error(f"❌ Recording file empty or not created for {username}")
+                        logger.error(f"❌ Recording file too small or not created for {username}")
                         return None
                         
                 except Exception as e:
@@ -266,14 +285,20 @@ def update_status(username, **kwargs):
     status_tracker[username]['last_updated'] = datetime.now().isoformat()
 
 def load_google_credentials():
-    """Load Google credentials from credentials.json file"""
+    """Load Google credentials from environment or file"""
     try:
+        # Try environment variable first
+        creds_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+        if creds_json:
+            return json.loads(creds_json)
+        
+        # Fallback to file
         if os.path.exists('credentials.json'):
             with open('credentials.json', 'r') as f:
                 return json.load(f)
-        else:
-            logger.error("❌ credentials.json not found!")
-            return None
+        
+        logger.error("❌ No Google credentials found!")
+        return None
     except Exception as e:
         logger.error(f"❌ Error loading credentials: {e}")
         return None
@@ -335,7 +360,7 @@ def monitoring_loop():
     uploader = GoogleDriveUploader(drive_service) if drive_service else None
     
     check_interval = 30  # seconds between full cycles
-    user_check_interval = 3  # seconds between users
+    user_check_interval = 5  # seconds between users
     
     while monitoring_active:
         try:
@@ -461,7 +486,7 @@ def auth_google():
             return "❌ Google credentials not found. Please add credentials.json file.", 500
         
         # Get the redirect URI from environment or construct it
-        redirect_uri = request.url_root.rstrip('/') + '/auth/callback'
+        redirect_uri = os.environ.get('OAUTH_REDIRECT_URI') or (request.url_root.rstrip('/') + '/auth/callback')
         
         flow = Flow.from_client_config(
             creds_info,
@@ -489,7 +514,7 @@ def auth_callback():
     
     try:
         creds_info = load_google_credentials()
-        redirect_uri = session.get('redirect_uri', request.url_root.rstrip('/') + '/auth/callback')
+        redirect_uri = session.get('redirect_uri')
         
         flow = Flow.from_client_config(
             creds_info,
@@ -589,8 +614,8 @@ if __name__ == '__main__':
     usernames = load_usernames()
     logger.info(f"👥 Monitoring {len(usernames)} users: {', '.join(usernames) if usernames else 'None'}")
     
-    if not os.path.exists('credentials.json'):
-        logger.warning("⚠️ credentials.json not found - Google Drive features will be disabled")
+    if not load_google_credentials():
+        logger.warning("⚠️ Google credentials not found - Google Drive features will be disabled")
     
     # Run Flask app
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)

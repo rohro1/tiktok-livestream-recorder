@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Authorize - TikTok Livestream Recorder</title>
+    <title>TikTok Livestream Recorder - Setup</title>
     <style>
         * {
             margin: 0;
@@ -64,50 +64,36 @@
         .button:hover {
             background: #3367d6;
             transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        }
-        
-        .status {
-            margin: 20px 0;
-            padding: 15px;
-            border-radius: 10px;
-        }
-        
-        .status.connected {
-            background: #e8f5e8;
-            color: #2e7d32;
-            border: 1px solid #4caf50;
-        }
-        
-        .status.disconnected {
-            background: #ffebee;
-            color: #c62828;
-            border: 1px solid #f44336;
+            box-shadow: 0 5px 15px rgba(66, 133, 244, 0.4);
         }
         
         .features {
-            text-align: left;
             margin-top: 30px;
+            text-align: left;
         }
         
-        .features h3 {
+        .feature {
+            display: flex;
+            align-items: center;
             margin-bottom: 15px;
-            color: #333;
+            color: #555;
         }
         
-        .features ul {
-            list-style: none;
+        .feature-icon {
+            margin-right: 10px;
+            font-size: 1.2em;
         }
         
-        .features li {
-            padding: 5px 0;
-            color: #666;
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            background: #f0f0f0;
         }
         
-        .features li:before {
-            content: '✓ ';
-            color: #4CAF50;
-            font-weight: bold;
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
         }
     </style>
 </head>
@@ -116,33 +102,40 @@
         <div class="logo">🎥</div>
         <h1>TikTok Livestream Recorder</h1>
         <p class="description">
-            Automatically monitors TikTok users and records their livestreams in 480p quality, 
-            then uploads them to your Google Drive with organized folder structure.
+            Automatically monitor TikTok users and record their livestreams. 
+            All recordings are automatically uploaded to your Google Drive.
         </p>
         
         {% if drive_connected %}
             <div class="status connected">
-                ✅ Google Drive Connected - Monitoring can begin!
+                ✅ Google Drive is already connected!
+                <br><br>
+                <a href="/status" class="button">Go to Dashboard</a>
             </div>
-            <a href="/status" class="button">📊 Go to Dashboard</a>
         {% else %}
-            <div class="status disconnected">
-                ⚠️ Google Drive authorization required to start monitoring
+            <a href="/auth/google" class="button">
+                🔗 Setup Google Drive
+            </a>
+            
+            <div class="features">
+                <div class="feature">
+                    <span class="feature-icon">🔍</span>
+                    <span>Real-time livestream monitoring</span>
+                </div>
+                <div class="feature">
+                    <span class="feature-icon">📹</span>
+                    <span>Automatic recording when live</span>
+                </div>
+                <div class="feature">
+                    <span class="feature-icon">☁️</span>
+                    <span>Auto-upload to Google Drive</span>
+                </div>
+                <div class="feature">
+                    <span class="feature-icon">📱</span>
+                    <span>Web dashboard for monitoring</span>
+                </div>
             </div>
-            <a href="/auth/google" class="button">🔗 Connect Google Drive</a>
         {% endif %}
-        
-        <div class="features">
-            <h3>Features:</h3>
-            <ul>
-                <li>Automatic livestream detection</li>
-                <li>480p quality recording</li>
-                <li>Google Drive backup with folder organization</li>
-                <li>Real-time monitoring dashboard</li>
-                <li>Multi-user simultaneous recording</li>
-                <li>Free tier compatible (Render.com)</li>
-            </ul>
-        </div>
     </div>
 </body>
 </html>
