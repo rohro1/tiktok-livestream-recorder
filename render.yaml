@@ -3,10 +3,10 @@ services:
     name: tiktok-livestream-recorder
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --config gunicorn_config.py main:app
+    startCommand: gunicorn wsgi:app --bind=0.0.0.0:$PORT --workers=1 --threads=4 --timeout=120
     envVars:
       - key: PORT
-        sync: false
+        value: 10000
       - key: PYTHON_VERSION
         value: 3.13.4
     healthCheckPath: /health
