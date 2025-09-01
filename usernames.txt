@@ -1,12 +1,27 @@
-
 # TikTok Livestream Recorder - Usernames Configuration
 # Add TikTok usernames here (one per line, without @)
 # Lines starting with # are comments and will be ignored
 
-# Example usernames (replace with actual usernames you want to monitor):
+# INSTRUCTIONS:
+# 1. Add usernames without the @ symbol
+# 2. One username per line
+# 3. Users will be checked every 30 seconds for live streams
+# 4. When live, recording starts automatically
+# 5. Files are uploaded to Google Drive with organized folder structure
+
+# EXAMPLE USERNAMES (remove # to activate):
 # charlidamelio
-# addisonre
+# addisonre  
 # khaby.lame
+# bellpoarch
+# zachking
+# spencerx
+# dixiedamelio
+# avani
+# lorengray
+# riyaz.14
 
-# Add your usernames below:
+# ADD YOUR USERNAMES BELOW:
+# (Add the actual TikTok usernames you want to monitor)
 
+mubarakdewan7
