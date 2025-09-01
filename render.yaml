@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: tiktok-livestream-recorder
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python wsgi.py
+    envVars:
+      - key: PORT
+        fromService:
+          name: tiktok-livestream-recorder
+          type: web
+          property: port
+      - key: PYTHON_VERSION
+        value: 3.13.4
