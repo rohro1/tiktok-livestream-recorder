@@ -399,7 +399,7 @@ if __name__ == '__main__':
     except Exception as e:
         logger.warning(f"Could not load existing credentials: {e}")
 
-    # Let gunicorn handle the port binding in production
-    if os.environ.get('RENDER') != 'true':
-        port = int(os.environ.get('PORT', 8000))
-        app.run(host='0.0.0.0', port=port, debug=True)
+    # Get port for both development and production
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"Starting server on port {port}")
+    app.run(host='0.0.0.0', port=port)
