@@ -14,6 +14,8 @@ import requests
 import yt_dlp
 import subprocess
 import re
+import threading
+import schedule
 
 # Configure logging
 logging.basicConfig(
@@ -347,6 +349,27 @@ def record_user_stream(username, checker, recorder, uploader):
         if username in recording_threads:
             del recording_threads[username]
 
+def auto_commit_job():
+    """Run auto-commit in background"""
+    try:
+        logger.info("🔄 Running auto-commit...")
+        result = subprocess.run(['python', 'auto_commit.py'], 
+                              capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            logger.info("✅ Auto-commit successful")
+        else:
+            logger.error(f"❌ Auto-commit failed: {result.stderr}")
+    except Exception as e:
+        logger.error(f"❌ Auto-commit error: {e}")
+
+def schedule_auto_commits():
+    """Schedule automatic commits every 30 minutes"""
+    schedule.every(30).minutes.do(auto_commit_job)
+    
+    while monitoring_active:
+        schedule.run_pending()
+        time.sleep(60)  # Check every minute
+
 def monitoring_loop():
     """Main monitoring loop with enhanced live detection"""
     global monitoring_active, drive_service
@@ -358,6 +381,11 @@ def monitoring_loop():
     checker = TikTokChecker()
     recorder = StreamRecorder()
     uploader = GoogleDriveUploader(drive_service) if drive_service else None
+    
+    # Start auto-commit scheduler in background
+    commit_thread = threading.Thread(target=schedule_auto_commits, daemon=True)
+    commit_thread.start()
+    logger.info("🔄 Auto-commit scheduler started")
     
     check_interval = 30  # seconds between full cycles
     user_check_interval = 5  # seconds between users

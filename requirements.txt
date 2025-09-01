@@ -7,3 +7,5 @@ google-auth-httplib2==0.2.0
 google-api-python-client==2.110.0
 requests==2.31.0
 yt-dlp==2023.12.30
+psutil==5.9.8
+schedule==1.2.0
