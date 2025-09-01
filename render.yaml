@@ -1,15 +1,15 @@
 services:
   - type: web
     name: tiktok-livestream-recorder
-    env: python
+    runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn wsgi:app --bind=0.0.0.0:$PORT --workers=1 --threads=4 --timeout=120
+    startCommand: python3 main.py
     envVars:
       - key: PORT
         value: 10000
-      - key: PYTHON_VERSION
-        value: 3.13.4
-    healthCheckPath: /health
+    scaling:
+      minInstances: 1
+      maxInstances: 1
     scaling:
       minInstances: 1
       maxInstances: 1
