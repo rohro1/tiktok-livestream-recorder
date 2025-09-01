@@ -1,22 +1,10 @@
-# Core Flask application
+
 Flask==3.0.0
-gunicorn==21.2.0
-
-# TikTok and video processing
-yt-dlp==2023.12.30
 requests==2.31.0
-
-# Google Drive integration
+yt-dlp==2023.12.30
 google-auth==2.25.2
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 google-api-python-client==2.110.0
-
-# Utilities
-python-dateutil==2.8.2
-Jinja2==3.1.2
-pytz>=2023.3
-
-# Optional: For better performance and debugging
-psutil==5.9.6
-colorlog==6.8.0
+gunicorn==21.2.0
+Werkzeug==3.0.1

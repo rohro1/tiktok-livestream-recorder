@@ -2,3 +2,15 @@ modules = ["python-3.12", "web", "bash"]
 
 [nix]
 channel = "stable-25_05"
+
+[workflows]
+runButton = "TikTok Recorder"
+
+[[workflows.workflow]]
+name = "TikTok Recorder"
+author = 47129978
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python main.py"
