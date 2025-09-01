@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -25,6 +24,7 @@ import subprocess
 import re
 import threading
 import schedule
+from urllib.parse import unquote
 
 # Configure logging
 logging.basicConfig(
@@ -48,64 +48,112 @@ status_tracker = {}
 recording_threads = {}
 
 class TikTokChecker:
-    """Enhanced TikTok live status checker with multiple detection methods"""
+    """Enhanced TikTok live status checker with updated detection methods"""
     
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
         })
     
     def is_live(self, username):
-        """Enhanced live detection with multiple fallback methods"""
+        """Enhanced live detection with updated methods for 2025"""
         try:
             logger.info(f"🔍 Checking live status for @{username}")
             
-            # Method 1: TikTok Live API endpoint
-            try:
-                api_url = f"https://www.tiktok.com/api/live/detail/?roomId=@{username}"
-                response = self.session.get(api_url, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('LiveRoomInfo', {}).get('status') == 2:
-                        logger.info(f"✅ API Method: {username} is LIVE!")
-                        return True
-            except Exception as e:
-                logger.debug(f"API method failed for {username}: {e}")
-            
-            # Method 2: Profile page scraping
+            # Method 1: Direct profile page analysis (most reliable)
             try:
                 profile_url = f"https://www.tiktok.com/@{username}"
                 response = self.session.get(profile_url, timeout=15)
                 
                 if response.status_code == 200:
-                    content = response.text.lower()
+                    content = response.text
                     
-                    # Enhanced live detection patterns
-                    live_indicators = [
-                        '"is_live":true',
-                        '"live_status":1',
-                        '"user_live_status":1',
-                        'liveroom',
-                        '"room_id"',
-                        'live_stream',
-                        'broadcasting',
-                        '"live":true'
+                    # Look for live stream indicators in the HTML
+                    live_patterns = [
+                        r'"live_room":\s*{[^}]*"status":\s*2',
+                        r'"roomStatus":\s*2',
+                        r'"liveRoomUserInfo":\s*{[^}]*"roomId"',
+                        r'"isLive":\s*true',
+                        r'"user_live_status":\s*1',
+                        r'live_room.*?status.*?2',
+                        r'roomId.*?[0-9]{10,}',
+                        r'"live":\s*true'
                     ]
                     
-                    for indicator in live_indicators:
-                        if indicator in content:
-                            logger.info(f"✅ Profile Method: {username} is LIVE! (Found: {indicator})")
+                    for pattern in live_patterns:
+                        if re.search(pattern, content, re.IGNORECASE):
+                            logger.info(f"✅ Profile Analysis: {username} is LIVE! (Pattern: {pattern[:30]}...)")
                             return True
+                    
+                    # Check for live room URL in the page
+                    live_url_pattern = r'https://www\.tiktok\.com/@' + re.escape(username) + r'/live'
+                    if re.search(live_url_pattern, content):
+                        logger.info(f"✅ Live URL found: {username} is LIVE!")
+                        return True
+                        
             except Exception as e:
-                logger.debug(f"Profile scraping failed for {username}: {e}")
+                logger.debug(f"Profile analysis failed for {username}: {e}")
             
-            # Method 3: yt-dlp verification
+            # Method 2: Try accessing live URL directly
+            try:
+                live_url = f"https://www.tiktok.com/@{username}/live"
+                live_response = self.session.get(live_url, timeout=10, allow_redirects=False)
+                
+                # If we get a 200 or 302 to a live room, user might be live
+                if live_response.status_code in [200, 302]:
+                    if live_response.status_code == 302:
+                        redirect_url = live_response.headers.get('Location', '')
+                        if 'live' in redirect_url and username in redirect_url:
+                            logger.info(f"✅ Live Redirect: {username} is LIVE!")
+                            return True
+                    elif live_response.status_code == 200:
+                        # Check if the live page actually has live content
+                        live_content = live_response.text
+                        if any(indicator in live_content.lower() for indicator in [
+                            'live_room', 'roomid', '"live":true', 'broadcasting', 'viewer'
+                        ]):
+                            logger.info(f"✅ Live Page: {username} is LIVE!")
+                            return True
+                            
+            except Exception as e:
+                logger.debug(f"Live URL check failed for {username}: {e}")
+            
+            # Method 3: Mobile API approach (alternative endpoint)
+            try:
+                # Use mobile user agent for different API response
+                mobile_headers = self.session.headers.copy()
+                mobile_headers.update({
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
+                })
+                
+                mobile_url = f"https://m.tiktok.com/@{username}"
+                mobile_response = requests.get(mobile_url, headers=mobile_headers, timeout=10)
+                
+                if mobile_response.status_code == 200:
+                    mobile_content = mobile_response.text.lower()
+                    mobile_indicators = ['live', 'broadcasting', 'viewer', 'room']
+                    
+                    # Count indicators to reduce false positives
+                    indicator_count = sum(1 for indicator in mobile_indicators if indicator in mobile_content)
+                    if indicator_count >= 2:
+                        logger.info(f"✅ Mobile Check: {username} is LIVE! (Indicators: {indicator_count})")
+                        return True
+                        
+            except Exception as e:
+                logger.debug(f"Mobile API check failed for {username}: {e}")
+            
+            # Method 4: yt-dlp verification (fallback)
             try:
                 live_url = f"https://www.tiktok.com/@{username}/live"
                 ydl_opts = {
@@ -114,7 +162,7 @@ class TikTokChecker:
                     'extract_flat': True,
                     'skip_download': True,
                     'no_check_certificate': True,
-                    'socket_timeout': 10
+                    'socket_timeout': 8
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -123,23 +171,11 @@ class TikTokChecker:
                         if info and (info.get('is_live') or info.get('live_status') == 'is_live'):
                             logger.info(f"✅ yt-dlp Method: {username} is LIVE!")
                             return True
-                    except yt_dlp.DownloadError:
-                        pass  # User likely not live
+                    except yt_dlp.DownloadError as e:
+                        if "live" not in str(e).lower():
+                            logger.debug(f"yt-dlp error for {username}: {e}")
             except Exception as e:
                 logger.debug(f"yt-dlp method failed for {username}: {e}")
-            
-            # Method 4: Alternative API check
-            try:
-                alt_url = f"https://www.tiktok.com/node/share/user/@{username}"
-                response = self.session.get(alt_url, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    user_info = data.get('seoProps', {}).get('metaParams', {})
-                    if user_info.get('live_status') == '1':
-                        logger.info(f"✅ Alternative API: {username} is LIVE!")
-                        return True
-            except Exception as e:
-                logger.debug(f"Alternative API failed for {username}: {e}")
             
             logger.debug(f"⚪ {username} is not live")
             return False
@@ -179,7 +215,10 @@ class StreamRecorder:
                 'live_from_start': True,
                 'wait_for_video': (5, 60),
                 'fragment_retries': 10,
-                'retry_sleep_functions': {'http': lambda n: 2 * n}
+                'retry_sleep_functions': {'http': lambda n: min(2 * n, 30)},
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
             }
             
             logger.info(f"🎬 Starting recording for {username}")
@@ -205,10 +244,47 @@ class StreamRecorder:
             return None
 
 class GoogleDriveUploader:
-    """Upload files to Google Drive"""
+    """Upload files to Google Drive with enhanced folder management"""
     
     def __init__(self, service):
         self.service = service
+        self.folder_cache = {}  # Cache folder IDs to avoid repeated API calls
+    
+    def create_user_folders(self, usernames):
+        """Create folder structure for all users upfront"""
+        try:
+            if not self.service:
+                logger.error("Google Drive service not initialized")
+                return False
+            
+            logger.info(f"📁 Creating folder structure for {len(usernames)} users...")
+            
+            # Create main folder
+            main_folder_id = self._get_or_create_folder('TikTok Recordings')
+            
+            # Create user folders
+            for username in usernames:
+                user_folder_id = self._get_or_create_folder(username, main_folder_id)
+                
+                # Create current month folder
+                date_folder = datetime.now().strftime('%Y-%m')
+                date_folder_id = self._get_or_create_folder(date_folder, user_folder_id)
+                
+                # Cache the structure
+                self.folder_cache[username] = {
+                    'main': main_folder_id,
+                    'user': user_folder_id,
+                    'current_month': date_folder_id
+                }
+                
+                logger.info(f"📂 Created folder structure for @{username}")
+            
+            logger.info("✅ All folder structures created successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating user folders: {e}")
+            return False
     
     def upload_video(self, file_path, username):
         """Upload video file to Google Drive"""
@@ -217,19 +293,32 @@ class GoogleDriveUploader:
                 logger.error("Google Drive service not initialized")
                 return None
             
-            # Create folder structure: TikTok Recordings/username/YYYY-MM
+            # Get or create folder structure
             date_folder = datetime.now().strftime('%Y-%m')
             
-            # Find or create main folder
-            main_folder_id = self._get_or_create_folder('TikTok Recordings')
-            user_folder_id = self._get_or_create_folder(username, main_folder_id)
-            date_folder_id = self._get_or_create_folder(date_folder, user_folder_id)
+            if username in self.folder_cache:
+                # Check if we need to create a new month folder
+                cached_month = self.folder_cache[username].get('current_month_name')
+                if cached_month != date_folder:
+                    # Create new month folder
+                    user_folder_id = self.folder_cache[username]['user']
+                    date_folder_id = self._get_or_create_folder(date_folder, user_folder_id)
+                    self.folder_cache[username]['current_month'] = date_folder_id
+                    self.folder_cache[username]['current_month_name'] = date_folder
+                
+                target_folder_id = self.folder_cache[username]['current_month']
+            else:
+                # Create folder structure for new user
+                main_folder_id = self._get_or_create_folder('TikTok Recordings')
+                user_folder_id = self._get_or_create_folder(username, main_folder_id)
+                date_folder_id = self._get_or_create_folder(date_folder, user_folder_id)
+                target_folder_id = date_folder_id
             
             # Upload file
             filename = os.path.basename(file_path)
             file_metadata = {
                 'name': filename,
-                'parents': [date_folder_id]
+                'parents': [target_folder_id]
             }
             
             media = MediaFileUpload(file_path, resumable=True)
@@ -249,16 +338,23 @@ class GoogleDriveUploader:
     def _get_or_create_folder(self, name, parent_id=None):
         """Get existing folder or create new one"""
         try:
+            # Create cache key
+            cache_key = f"{name}_{parent_id or 'root'}"
+            if cache_key in self.folder_cache:
+                return self.folder_cache[cache_key]
+            
             # Search for existing folder
-            query = f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
+            query = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
             if parent_id:
                 query += f" and '{parent_id}' in parents"
             
-            results = self.service.files().list(q=query).execute()
+            results = self.service.files().list(q=query, fields='files(id, name)').execute()
             items = results.get('files', [])
             
             if items:
-                return items[0]['id']
+                folder_id = items[0]['id']
+                self.folder_cache[cache_key] = folder_id
+                return folder_id
             
             # Create new folder
             folder_metadata = {
@@ -269,7 +365,9 @@ class GoogleDriveUploader:
                 folder_metadata['parents'] = [parent_id]
             
             folder = self.service.files().create(body=folder_metadata, fields='id').execute()
-            return folder.get('id')
+            folder_id = folder.get('id')
+            self.folder_cache[cache_key] = folder_id
+            return folder_id
             
         except Exception as e:
             logger.error(f"Error creating folder {name}: {e}")
@@ -279,13 +377,34 @@ def load_usernames():
     """Load usernames from file"""
     try:
         if os.path.exists('usernames.txt'):
-            with open('usernames.txt', 'r') as f:
-                usernames = [line.strip().replace('@', '') for line in f if line.strip() and not line.strip().startswith('#')]
-                return [u for u in usernames if u]
+            with open('usernames.txt', 'r', encoding='utf-8') as f:
+                usernames = []
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        # Clean username
+                        username = line.replace('@', '').strip()
+                        if username and username not in usernames:
+                            usernames.append(username)
+                return usernames
         return []
     except Exception as e:
         logger.error(f"Error loading usernames: {e}")
         return []
+
+def save_usernames(usernames):
+    """Save usernames to file"""
+    try:
+        with open('usernames.txt', 'w', encoding='utf-8') as f:
+            f.write("# TikTok Livestream Recorder - Usernames Configuration\n")
+            f.write("# Add TikTok usernames here (one per line, without @)\n")
+            f.write("# Lines starting with # are comments and will be ignored\n\n")
+            for username in usernames:
+                f.write(f"{username}\n")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving usernames: {e}")
+        return False
 
 def update_status(username, **kwargs):
     """Update user status in tracker"""
@@ -391,13 +510,19 @@ def monitoring_loop():
     recorder = StreamRecorder()
     uploader = GoogleDriveUploader(drive_service) if drive_service else None
     
+    # Create folder structure for all users upfront
+    if uploader:
+        usernames = load_usernames()
+        if usernames:
+            uploader.create_user_folders(usernames)
+    
     # Start auto-commit scheduler in background
     commit_thread = threading.Thread(target=schedule_auto_commits, daemon=True)
     commit_thread.start()
     logger.info("🔄 Auto-commit scheduler started")
     
     check_interval = 30  # seconds between full cycles
-    user_check_interval = 5  # seconds between users
+    user_check_interval = 3  # seconds between users
     
     while monitoring_active:
         try:
@@ -526,7 +651,15 @@ def auth_google():
             return "❌ Google credentials not found. Please add credentials.json file.", 500
         
         # Get the redirect URI from environment or construct it
-        redirect_uri = os.environ.get('OAUTH_REDIRECT_URI') or (request.url_root.rstrip('/') + '/auth/callback')
+        redirect_uri = os.environ.get('OAUTH_REDIRECT_URI')
+        if not redirect_uri:
+            # Auto-detect based on request
+            if request.host.endswith('.onrender.com'):
+                redirect_uri = f"https://{request.host}/oauth2callback"
+            else:
+                redirect_uri = f"{request.scheme}://{request.host}/oauth2callback"
+        
+        logger.info(f"🔗 Using OAuth redirect URI: {redirect_uri}")
         
         flow = Flow.from_client_config(
             creds_info,
@@ -547,8 +680,8 @@ def auth_google():
         logger.error(f"❌ OAuth initiation error: {e}")
         return f"Authorization setup failed: {e}", 500
 
-@app.route('/auth/callback')
-def auth_callback():
+@app.route('/oauth2callback')
+def oauth2callback():
     """Handle OAuth callback and auto-start monitoring"""
     global drive_service, monitoring_thread
     
@@ -591,7 +724,10 @@ def auth_callback():
 @app.route('/authorize')
 def authorize():
     """Authorization page"""
-    return render_template('authorize.html', drive_connected=bool(drive_service))
+    usernames = load_usernames()  # Load usernames to display on auth page
+    return render_template('authorize.html', 
+                         drive_connected=bool(drive_service),
+                         usernames=usernames)
 
 @app.route('/start_monitoring', methods=['POST'])
 def start_monitoring():
@@ -624,15 +760,56 @@ def add_user():
     try:
         usernames = load_usernames()
         if username not in usernames:
-            with open('usernames.txt', 'a') as f:
-                f.write(f'\n{username}')
-            logger.info(f"➕ Added user: {username}")
+            usernames.append(username)
+            if save_usernames(usernames):
+                logger.info(f"➕ Added user: {username}")
+                
+                # Create folder structure for new user if Drive is connected
+                if drive_service:
+                    uploader = GoogleDriveUploader(drive_service)
+                    uploader.create_user_folders([username])
+                    
+            else:
+                logger.error(f"❌ Failed to save username: {username}")
+                return jsonify({'error': 'Failed to save username'}), 500
         else:
             logger.info(f"ℹ️ User {username} already exists")
         
         return redirect(url_for('status'))
     except Exception as e:
         logger.error(f"❌ Error adding user: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/remove_user', methods=['POST'])
+def remove_user():
+    """Remove user from monitoring"""
+    username = request.form.get('username', '').strip().replace('@', '')
+    if not username:
+        return jsonify({'error': 'Username required'}), 400
+    
+    try:
+        usernames = load_usernames()
+        if username in usernames:
+            usernames.remove(username)
+            if save_usernames(usernames):
+                logger.info(f"➖ Removed user: {username}")
+                
+                # Stop recording if active
+                if username in recording_threads:
+                    del recording_threads[username]
+                
+                # Remove from status tracker
+                if username in status_tracker:
+                    del status_tracker[username]
+            else:
+                logger.error(f"❌ Failed to remove username: {username}")
+                return jsonify({'error': 'Failed to remove username'}), 500
+        else:
+            logger.info(f"ℹ️ User {username} not found")
+        
+        return redirect(url_for('status'))
+    except Exception as e:
+        logger.error(f"❌ Error removing user: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health')
@@ -645,6 +822,14 @@ def health():
         'active_recordings': len(recording_threads),
         'drive_connected': bool(drive_service),
         'usernames_count': len(load_usernames())
+    })
+
+@app.route('/api/usernames')
+def api_usernames():
+    """API endpoint to get current usernames"""
+    return jsonify({
+        'usernames': load_usernames(),
+        'count': len(load_usernames())
     })
 
 if __name__ == '__main__':
