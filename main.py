@@ -1,670 +1,519 @@
 import os
-import json
 import time
-import threading
+import json
 import logging
-from datetime import datetime
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session
-try:
-    from google_auth_oauthlib.flow import Flow
-    from google.oauth2.credentials import Credentials
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaFileUpload
-    GOOGLE_AUTH_AVAILABLE = True
-except ImportError as e:
-    print(f"Google Auth not available: {e}")
-    Flow = None
-    Credentials = None
-    build = None
-    MediaFileUpload = None
-    GOOGLE_AUTH_AVAILABLE = False
 import requests
-import yt_dlp
 import subprocess
-import re
 import threading
-import schedule
-from urllib.parse import unquote
+from datetime import datetime
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+import re
+import signal
+import sys
+from pathlib import Path
+import hashlib
+import secrets
 
-# Configure logging
+# Auto-configure Flask app
+app = Flask(__name__)
+
+def load_credentials_config():
+    """Load configuration from credentials.json"""
+    try:
+        with open('credentials.json', 'r') as f:
+            creds = json.load(f)
+        
+        # Generate a consistent secret key from client_id
+        client_id = creds['web']['client_id']
+        secret_key = hashlib.sha256(client_id.encode()).hexdigest()[:32]
+        
+        return {
+            'secret_key': secret_key,
+            'client_id': creds['web']['client_id'],
+            'client_secret': creds['web']['client_secret'],
+            'redirect_uris': creds['web']['redirect_uris']
+        }
+    except FileNotFoundError:
+        logging.error("❌ credentials.json not found! Please add your Google OAuth credentials.")
+        # Generate a random secret key as fallback
+        return {
+            'secret_key': secrets.token_hex(16),
+            'client_id': None,
+            'client_secret': None,
+            'redirect_uris': None
+        }
+    except Exception as e:
+        logging.error(f"❌ Error loading credentials: {e}")
+        return {
+            'secret_key': secrets.token_hex(16),
+            'client_id': None,
+            'client_secret': None,
+            'redirect_uris': None
+        }
+
+# Load configuration
+config = load_credentials_config()
+app.secret_key = config['secret_key']
+
+# Google Drive API configuration
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
+CLIENT_SECRETS_FILE = 'credentials.json'
+
+# Global variables
+recording_processes = {}
+live_status = {}
+user_folders = {}
+recorder = None
+
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('app.log'),
+        logging.FileHandler('tiktok_recorder.log'),
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'tiktok-recorder-secret-key-2024')
-
-# Global variables
-monitoring_active = False
-monitoring_thread = None
-drive_service = None
-status_tracker = {}
-recording_threads = {}
-
-class TikTokChecker:
-    """Enhanced TikTok live status checker with updated detection methods"""
-    
+class TikTokRecorder:
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0'
-        })
-    
-    def is_live(self, username):
-        """Enhanced live detection with updated methods for 2025"""
-        try:
-            logger.info(f"🔍 Checking live status for @{username}")
-            
-            # Method 1: Direct profile page analysis (most reliable)
-            try:
-                profile_url = f"https://www.tiktok.com/@{username}"
-                response = self.session.get(profile_url, timeout=15)
-                
-                if response.status_code == 200:
-                    content = response.text
-                    
-                    # Look for live stream indicators in the HTML
-                    live_patterns = [
-                        r'"live_room":\s*{[^}]*"status":\s*2',
-                        r'"roomStatus":\s*2',
-                        r'"liveRoomUserInfo":\s*{[^}]*"roomId"',
-                        r'"isLive":\s*true',
-                        r'"user_live_status":\s*1',
-                        r'live_room.*?status.*?2',
-                        r'roomId.*?[0-9]{10,}',
-                        r'"live":\s*true'
-                    ]
-                    
-                    for pattern in live_patterns:
-                        if re.search(pattern, content, re.IGNORECASE):
-                            logger.info(f"✅ Profile Analysis: {username} is LIVE! (Pattern: {pattern[:30]}...)")
-                            return True
-                    
-                    # Check for live room URL in the page
-                    live_url_pattern = r'https://www\.tiktok\.com/@' + re.escape(username) + r'/live'
-                    if re.search(live_url_pattern, content):
-                        logger.info(f"✅ Live URL found: {username} is LIVE!")
-                        return True
-                        
-            except Exception as e:
-                logger.debug(f"Profile analysis failed for {username}: {e}")
-            
-            # Method 2: Try accessing live URL directly
-            try:
-                live_url = f"https://www.tiktok.com/@{username}/live"
-                live_response = self.session.get(live_url, timeout=10, allow_redirects=False)
-                
-                # If we get a 200 or 302 to a live room, user might be live
-                if live_response.status_code in [200, 302]:
-                    if live_response.status_code == 302:
-                        redirect_url = live_response.headers.get('Location', '')
-                        if 'live' in redirect_url and username in redirect_url:
-                            logger.info(f"✅ Live Redirect: {username} is LIVE!")
-                            return True
-                    elif live_response.status_code == 200:
-                        # Check if the live page actually has live content
-                        live_content = live_response.text
-                        if any(indicator in live_content.lower() for indicator in [
-                            'live_room', 'roomid', '"live":true', 'broadcasting', 'viewer'
-                        ]):
-                            logger.info(f"✅ Live Page: {username} is LIVE!")
-                            return True
-                            
-            except Exception as e:
-                logger.debug(f"Live URL check failed for {username}: {e}")
-            
-            # Method 3: Mobile API approach (alternative endpoint)
-            try:
-                # Use mobile user agent for different API response
-                mobile_headers = self.session.headers.copy()
-                mobile_headers.update({
-                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
-                })
-                
-                mobile_url = f"https://m.tiktok.com/@{username}"
-                mobile_response = requests.get(mobile_url, headers=mobile_headers, timeout=10)
-                
-                if mobile_response.status_code == 200:
-                    mobile_content = mobile_response.text.lower()
-                    mobile_indicators = ['live', 'broadcasting', 'viewer', 'room']
-                    
-                    # Count indicators to reduce false positives
-                    indicator_count = sum(1 for indicator in mobile_indicators if indicator in mobile_content)
-                    if indicator_count >= 2:
-                        logger.info(f"✅ Mobile Check: {username} is LIVE! (Indicators: {indicator_count})")
-                        return True
-                        
-            except Exception as e:
-                logger.debug(f"Mobile API check failed for {username}: {e}")
-            
-            # Method 4: yt-dlp verification (fallback)
-            try:
-                live_url = f"https://www.tiktok.com/@{username}/live"
-                ydl_opts = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'extract_flat': True,
-                    'skip_download': True,
-                    'no_check_certificate': True,
-                    'socket_timeout': 8
-                }
-                
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    try:
-                        info = ydl.extract_info(live_url, download=False)
-                        if info and (info.get('is_live') or info.get('live_status') == 'is_live'):
-                            logger.info(f"✅ yt-dlp Method: {username} is LIVE!")
-                            return True
-                    except yt_dlp.DownloadError as e:
-                        if "live" not in str(e).lower():
-                            logger.debug(f"yt-dlp error for {username}: {e}")
-            except Exception as e:
-                logger.debug(f"yt-dlp method failed for {username}: {e}")
-            
-            logger.debug(f"⚪ {username} is not live")
-            return False
-            
-        except Exception as e:
-            logger.error(f"❌ Error checking live status for {username}: {e}")
-            return False
-
-class StreamRecorder:
-    """Enhanced stream recorder with better error handling"""
-    
-    def __init__(self):
-        self.recordings_dir = "recordings"
+        self.users_file = 'usernames.txt'
+        self.recordings_dir = 'recordings'
+        self.ensure_directories()
+        
+    def ensure_directories(self):
+        """Create necessary directories"""
         os.makedirs(self.recordings_dir, exist_ok=True)
-    
-    def record_stream(self, username):
-        """Record a TikTok livestream with enhanced options"""
+        if not os.path.exists(self.users_file):
+            with open(self.users_file, 'w') as f:
+                f.write('')
+                
+    def load_users(self):
+        """Load users from file"""
         try:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_file = os.path.join(self.recordings_dir, f"{username}_{timestamp}.mp4")
+            with open(self.users_file, 'r') as f:
+                users = [line.strip() for line in f.readlines() if line.strip()]
+            return list(set(users))  # Remove duplicates
+        except FileNotFoundError:
+            return []
             
-            live_url = f"https://www.tiktok.com/@{username}/live"
+    def save_users(self, users):
+        """Save users to file"""
+        with open(self.users_file, 'w') as f:
+            for user in set(users):  # Remove duplicates
+                if user.strip():
+                    f.write(f"{user.strip()}\n")
+                
+    def add_user(self, username):
+        """Add a new user"""
+        users = self.load_users()
+        username = username.strip().replace('@', '')
+        
+        if username and username not in users:
+            users.append(username)
+            self.save_users(users)
+            self.create_user_folder(username)
+            logging.info(f"➕ Added user: {username}")
+            return True
+        return False
+        
+    def remove_user(self, username):
+        """Remove a user"""
+        users = self.load_users()
+        username = username.strip().replace('@', '')
+        
+        if username in users:
+            users.remove(username)
+            self.save_users(users)
+            # Stop recording if active
+            if username in recording_processes:
+                self.stop_recording(username)
+            logging.info(f"➖ Removed user: {username}")
+            return True
+        return False
+        
+    def create_user_folder(self, username):
+        """Create folder structure for a user"""
+        user_dir = os.path.join(self.recordings_dir, username)
+        os.makedirs(user_dir, exist_ok=True)
+        user_folders[username] = user_dir
+        logging.info(f"📂 Created folder structure for @{username}")
+        
+    def check_live_status_improved(self, username):
+        """Improved live status detection"""
+        try:
+            clean_username = username.replace('@', '')
+            url = f"https://www.tiktok.com/@{clean_username}/live"
             
-            # Enhanced yt-dlp options for better compatibility
-            ydl_opts = {
-                'format': 'best[height<=720]/best',
-                'outtmpl': output_file,
-                'no_warnings': False,
-                'extractaudio': False,
-                'embed_subs': False,
-                'writesubtitles': False,
-                'writeautomaticsub': False,
-                'ignoreerrors': False,
-                'no_check_certificate': True,
-                'prefer_ffmpeg': True,
-                'hls_prefer_native': True,
-                'live_from_start': True,
-                'wait_for_video': (5, 60),
-                'fragment_retries': 10,
-                'retry_sleep_functions': {'http': lambda n: min(2 * n, 30)},
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
             }
             
-            logger.info(f"🎬 Starting recording for {username}")
+            response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                try:
-                    ydl.download([live_url])
-                    
-                    # Check if file was created successfully
-                    if os.path.exists(output_file) and os.path.getsize(output_file) > 10240:  # At least 10KB
-                        logger.info(f"✅ Recording completed: {output_file}")
-                        return output_file
-                    else:
-                        logger.error(f"❌ Recording file too small or not created for {username}")
-                        return None
-                        
-                except Exception as e:
-                    logger.error(f"❌ yt-dlp recording failed for {username}: {e}")
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"❌ Recording error for {username}: {e}")
-            return None
-
-class GoogleDriveUploader:
-    """Upload files to Google Drive with enhanced folder management"""
-    
-    def __init__(self, service):
-        self.service = service
-        self.folder_cache = {}  # Cache folder IDs to avoid repeated API calls
-    
-    def create_user_folders(self, usernames):
-        """Create folder structure for all users upfront"""
-        try:
-            if not self.service:
-                logger.error("Google Drive service not initialized")
+            if response.status_code != 200:
+                logging.warning(f"❌ HTTP {response.status_code} for @{username}")
                 return False
             
-            logger.info(f"📁 Creating folder structure for {len(usernames)} users...")
+            content = response.text.lower()
             
-            # Create main folder
-            main_folder_id = self._get_or_create_folder('TikTok Recordings')
+            # Multiple detection methods
+            live_indicators = [
+                '"live_status":2',
+                '"live_status":"2"',
+                'islive":true',
+                'live_room',
+                'live_stream',
+                '"status":2',
+                'liveroom',
+                'live_replay'
+            ]
             
-            # Create user folders
-            for username in usernames:
-                user_folder_id = self._get_or_create_folder(username, main_folder_id)
-                
-                # Create current month folder
-                date_folder = datetime.now().strftime('%Y-%m')
-                date_folder_id = self._get_or_create_folder(date_folder, user_folder_id)
-                
-                # Cache the structure
-                self.folder_cache[username] = {
-                    'main': main_folder_id,
-                    'user': user_folder_id,
-                    'current_month': date_folder_id
-                }
-                
-                logger.info(f"📂 Created folder structure for @{username}")
+            # Check for live indicators
+            is_live = any(indicator in content for indicator in live_indicators)
             
-            logger.info("✅ All folder structures created successfully")
+            # Additional checks
+            if is_live:
+                # Verify it's actually a live stream, not just a page with live elements
+                not_live_indicators = [
+                    'not_live',
+                    'offline',
+                    'ended',
+                    'replay',
+                    '"live_status":0',
+                    '"live_status":"0"'
+                ]
+                
+                if any(indicator in content for indicator in not_live_indicators):
+                    is_live = False
+            
+            # Log detection details
+            if is_live:
+                found_indicators = [ind for ind in live_indicators if ind in content]
+                logging.info(f"✅ {username} is LIVE! Found: {found_indicators}")
+            else:
+                logging.info(f"❌ {username} is not live")
+                
+            return is_live
+            
+        except requests.exceptions.RequestException as e:
+            logging.error(f"❌ Error checking {username}: {e}")
+            return False
+        except Exception as e:
+            logging.error(f"❌ Unexpected error for {username}: {e}")
+            return False
+    
+    def get_stream_url(self, username):
+        """Get the actual stream URL for recording"""
+        try:
+            clean_username = username.replace('@', '')
+            
+            # Use yt-dlp to get stream URL
+            cmd = [
+                'yt-dlp',
+                '--get-url',
+                '--no-warnings',
+                f'https://www.tiktok.com/@{clean_username}/live'
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                stream_url = result.stdout.strip()
+                logging.info(f"🔗 Got stream URL for {username}")
+                return stream_url
+            else:
+                logging.error(f"❌ Failed to get stream URL for {username}: {result.stderr}")
+                return None
+                
+        except subprocess.TimeoutExpired:
+            logging.error(f"❌ Timeout getting stream URL for {username}")
+            return None
+        except Exception as e:
+            logging.error(f"❌ Error getting stream URL for {username}: {e}")
+            return None
+    
+    def start_recording(self, username):
+        """Start recording with FFmpeg"""
+        if username in recording_processes:
+            logging.info(f"📹 Already recording {username}")
+            return False
+            
+        try:
+            # Get stream URL
+            stream_url = self.get_stream_url(username)
+            if not stream_url:
+                logging.error(f"❌ Cannot get stream URL for {username}")
+                return False
+            
+            # Create user folder if it doesn't exist
+            self.create_user_folder(username)
+            
+            # Generate filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{username}_{timestamp}.mp4"
+            filepath = os.path.join(self.recordings_dir, username, filename)
+            
+            # FFmpeg command with proper error handling
+            cmd = [
+                'ffmpeg',
+                '-i', stream_url,
+                '-c', 'copy',  # Copy streams without re-encoding
+                '-f', 'mp4',
+                '-movflags', '+faststart',
+                '-y',  # Overwrite output file
+                filepath
+            ]
+            
+            # Start FFmpeg process
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True
+            )
+            
+            recording_processes[username] = {
+                'process': process,
+                'filename': filename,
+                'filepath': filepath,
+                'start_time': datetime.now(),
+                'stream_url': stream_url
+            }
+            
+            logging.info(f"🎬 Started recording {username} -> {filename}")
+            
+            # Start monitoring thread
+            monitor_thread = threading.Thread(
+                target=self.monitor_recording,
+                args=(username, process),
+                daemon=True
+            )
+            monitor_thread.start()
+            
             return True
             
         except Exception as e:
-            logger.error(f"❌ Error creating user folders: {e}")
+            logging.error(f"❌ Error starting recording for {username}: {e}")
             return False
     
-    def upload_video(self, file_path, username):
-        """Upload video file to Google Drive"""
+    def monitor_recording(self, username, process):
+        """Monitor the recording process"""
         try:
-            if not self.service:
-                logger.error("Google Drive service not initialized")
-                return None
-            
-            # Get or create folder structure
-            date_folder = datetime.now().strftime('%Y-%m')
-            
-            if username in self.folder_cache:
-                # Check if we need to create a new month folder
-                cached_month = self.folder_cache[username].get('current_month_name')
-                if cached_month != date_folder:
-                    # Create new month folder
-                    user_folder_id = self.folder_cache[username]['user']
-                    date_folder_id = self._get_or_create_folder(date_folder, user_folder_id)
-                    self.folder_cache[username]['current_month'] = date_folder_id
-                    self.folder_cache[username]['current_month_name'] = date_folder
+            while process.poll() is None:
+                time.sleep(5)
                 
-                target_folder_id = self.folder_cache[username]['current_month']
-            else:
-                # Create folder structure for new user
-                main_folder_id = self._get_or_create_folder('TikTok Recordings')
-                user_folder_id = self._get_or_create_folder(username, main_folder_id)
-                date_folder_id = self._get_or_create_folder(date_folder, user_folder_id)
-                target_folder_id = date_folder_id
+                # Check if file is being written to
+                if username in recording_processes:
+                    filepath = recording_processes[username]['filepath']
+                    if os.path.exists(filepath):
+                        file_size = os.path.getsize(filepath)
+                        duration = datetime.now() - recording_processes[username]['start_time']
+                        logging.info(f"📊 {username}: Recording for {duration}, File size: {file_size} bytes")
+                    else:
+                        logging.warning(f"⚠️ {username}: Recording file not found!")
             
-            # Upload file
-            filename = os.path.basename(file_path)
+            # Process ended
+            return_code = process.returncode
+            if return_code == 0:
+                logging.info(f"✅ Recording completed for {username}")
+            else:
+                stderr_output = process.stderr.read() if process.stderr else "No error output"
+                logging.error(f"❌ Recording failed for {username} (exit code: {return_code}): {stderr_output}")
+            
+            # Clean up
+            if username in recording_processes:
+                filepath = recording_processes[username]['filepath']
+                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                    logging.info(f"💾 Saved recording: {filepath}")
+                    # Upload to Google Drive if authorized
+                    if 'credentials' in session:
+                        self.upload_to_drive(filepath, username)
+                else:
+                    logging.warning(f"⚠️ Empty or missing recording file: {filepath}")
+                
+                del recording_processes[username]
+                
+        except Exception as e:
+            logging.error(f"❌ Error monitoring recording for {username}: {e}")
+            if username in recording_processes:
+                del recording_processes[username]
+    
+    def stop_recording(self, username):
+        """Stop recording for a user"""
+        if username in recording_processes:
+            try:
+                process = recording_processes[username]['process']
+                process.terminate()
+                
+                # Wait for graceful termination
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                
+                logging.info(f"🛑 Stopped recording {username}")
+                return True
+            except Exception as e:
+                logging.error(f"❌ Error stopping recording for {username}: {e}")
+                return False
+        return False
+    
+    def upload_to_drive(self, filepath, username):
+        """Upload recording to Google Drive"""
+        try:
+            if 'credentials' not in session:
+                logging.warning("❌ No Google Drive credentials available")
+                return False
+                
+            creds = Credentials.from_authorized_user_info(session['credentials'])
+            service = build('drive', 'v3', credentials=creds)
+            
+            filename = os.path.basename(filepath)
+            
+            # Create folder for user if it doesn't exist
+            folder_id = self.get_or_create_drive_folder(service, f"TikTok_{username}")
+            
             file_metadata = {
                 'name': filename,
-                'parents': [target_folder_id]
+                'parents': [folder_id]
             }
             
-            media = MediaFileUpload(file_path, resumable=True)
-            file = self.service.files().create(
+            media = MediaFileUpload(filepath, resumable=True)
+            
+            file = service.files().create(
                 body=file_metadata,
                 media_body=media,
-                fields='id,webViewLink'
+                fields='id'
             ).execute()
             
-            logger.info(f"📁 Uploaded {filename} to Google Drive")
-            return file.get('webViewLink')
+            logging.info(f"☁️ Uploaded {filename} to Google Drive (ID: {file.get('id')})")
+            return True
             
         except Exception as e:
-            logger.error(f"Drive upload error: {e}")
-            return None
+            logging.error(f"❌ Error uploading to Google Drive: {e}")
+            return False
     
-    def _get_or_create_folder(self, name, parent_id=None):
-        """Get existing folder or create new one"""
+    def get_or_create_drive_folder(self, service, folder_name):
+        """Get or create a folder in Google Drive"""
         try:
-            # Create cache key
-            cache_key = f"{name}_{parent_id or 'root'}"
-            if cache_key in self.folder_cache:
-                return self.folder_cache[cache_key]
-            
             # Search for existing folder
-            query = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-            if parent_id:
-                query += f" and '{parent_id}' in parents"
+            results = service.files().list(
+                q=f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder'",
+                fields="files(id, name)"
+            ).execute()
             
-            results = self.service.files().list(q=query, fields='files(id, name)').execute()
-            items = results.get('files', [])
+            folders = results.get('files', [])
             
-            if items:
-                folder_id = items[0]['id']
-                self.folder_cache[cache_key] = folder_id
-                return folder_id
-            
-            # Create new folder
-            folder_metadata = {
-                'name': name,
-                'mimeType': 'application/vnd.google-apps.folder'
-            }
-            if parent_id:
-                folder_metadata['parents'] = [parent_id]
-            
-            folder = self.service.files().create(body=folder_metadata, fields='id').execute()
-            folder_id = folder.get('id')
-            self.folder_cache[cache_key] = folder_id
-            return folder_id
-            
+            if folders:
+                return folders[0]['id']
+            else:
+                # Create new folder
+                folder_metadata = {
+                    'name': folder_name,
+                    'mimeType': 'application/vnd.google-apps.folder'
+                }
+                
+                folder = service.files().create(body=folder_metadata, fields='id').execute()
+                return folder.get('id')
+                
         except Exception as e:
-            logger.error(f"Error creating folder {name}: {e}")
+            logging.error(f"❌ Error with Drive folder: {e}")
             return None
 
-def load_usernames():
-    """Load usernames from file"""
-    try:
-        if os.path.exists('usernames.txt'):
-            with open('usernames.txt', 'r', encoding='utf-8') as f:
-                usernames = []
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        # Clean username
-                        username = line.replace('@', '').strip()
-                        if username and username not in usernames:
-                            usernames.append(username)
-                return usernames
-        return []
-    except Exception as e:
-        logger.error(f"Error loading usernames: {e}")
-        return []
+# Initialize recorder
+recorder = TikTokRecorder()
 
-def save_usernames(usernames):
-    """Save usernames to file"""
-    try:
-        with open('usernames.txt', 'w', encoding='utf-8') as f:
-            f.write("# TikTok Livestream Recorder - Usernames Configuration\n")
-            f.write("# Add TikTok usernames here (one per line, without @)\n")
-            f.write("# Lines starting with # are comments and will be ignored\n\n")
-            for username in usernames:
-                f.write(f"{username}\n")
-        return True
-    except Exception as e:
-        logger.error(f"Error saving usernames: {e}")
-        return False
-
-def update_status(username, **kwargs):
-    """Update user status in tracker"""
-    if username not in status_tracker:
-        status_tracker[username] = {}
-    
-    status_tracker[username].update(kwargs)
-    status_tracker[username]['last_updated'] = datetime.now().isoformat()
-
-def load_google_credentials():
-    """Load Google credentials from environment or file"""
-    try:
-        # Try environment variable first
-        creds_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
-        if creds_json:
-            return json.loads(creds_json)
-        
-        # Fallback to file
-        if os.path.exists('credentials.json'):
-            with open('credentials.json', 'r') as f:
-                return json.load(f)
-        
-        logger.error("❌ No Google credentials found!")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Error loading credentials: {e}")
-        return None
-
-def record_user_stream(username, checker, recorder, uploader):
-    """Record a user's livestream in separate thread"""
-    try:
-        logger.info(f"🎬 Recording thread started for {username}")
-        update_status(username, is_recording=True, recording_start=datetime.now().isoformat())
-        
-        # Record the stream
-        output_file = recorder.record_stream(username)
-        
-        if output_file and os.path.exists(output_file):
-            file_size = os.path.getsize(output_file)
-            logger.info(f"✅ Recording completed for {username}: {file_size} bytes")
-            
-            update_status(username, 
-                         last_recording=output_file,
-                         recording_end=datetime.now().isoformat(),
-                         file_size=file_size)
-            
-            # Upload to Google Drive
-            if uploader:
-                try:
-                    drive_url = uploader.upload_video(output_file, username)
-                    if drive_url:
-                        update_status(username, drive_link=drive_url)
-                        # Remove local file after successful upload
-                        os.remove(output_file)
-                        logger.info(f"📁 Uploaded and cleaned up: {username}")
-                    else:
-                        logger.error(f"❌ Drive upload failed for {username}")
-                except Exception as e:
-                    logger.error(f"❌ Drive upload error for {username}: {e}")
-        else:
-            logger.error(f"❌ Recording failed for {username}")
-        
-        update_status(username, is_recording=False)
-        
-    except Exception as e:
-        logger.error(f"❌ Recording thread error for {username}: {e}")
-        update_status(username, is_recording=False, error=str(e))
-    finally:
-        # Clean up thread reference
-        if username in recording_threads:
-            del recording_threads[username]
-
-def auto_commit_job():
-    """Run auto-commit in background"""
-    try:
-        logger.info("🔄 Running auto-commit...")
-        result = subprocess.run(['python', 'auto_commit.py'], 
-                              capture_output=True, text=True, timeout=300)
-        if result.returncode == 0:
-            logger.info("✅ Auto-commit successful")
-        else:
-            logger.error(f"❌ Auto-commit failed: {result.stderr}")
-    except Exception as e:
-        logger.error(f"❌ Auto-commit error: {e}")
-
-def schedule_auto_commits():
-    """Schedule automatic commits every 30 minutes"""
-    schedule.every(30).minutes.do(auto_commit_job)
-    
-    while monitoring_active:
-        schedule.run_pending()
-        time.sleep(60)  # Check every minute
-
-def monitoring_loop():
-    """Main monitoring loop with enhanced live detection"""
-    global monitoring_active, drive_service
-    
-    logger.info("🚀 Starting monitoring loop")
-    monitoring_active = True
-    
-    # Initialize components
-    checker = TikTokChecker()
-    recorder = StreamRecorder()
-    uploader = GoogleDriveUploader(drive_service) if drive_service else None
-    
-    # Create folder structure for all users upfront
-    if uploader:
-        usernames = load_usernames()
-        if usernames:
-            uploader.create_user_folders(usernames)
-    
-    # Start auto-commit scheduler in background
-    commit_thread = threading.Thread(target=schedule_auto_commits, daemon=True)
-    commit_thread.start()
-    logger.info("🔄 Auto-commit scheduler started")
-    
-    check_interval = 30  # seconds between full cycles
-    user_check_interval = 3  # seconds between users
-    
-    while monitoring_active:
-        try:
-            usernames = load_usernames()
-            if not usernames:
-                logger.info("⚠️ No usernames to monitor")
-                time.sleep(60)
-                continue
-            
-            logger.info(f"🔍 Checking {len(usernames)} users...")
-            
-            for username in usernames:
-                if not monitoring_active:
-                    break
-                
-                try:
-                    # Check if user is live
-                    is_live = checker.is_live(username)
-                    
-                    current_time = datetime.now().isoformat()
-                    update_status(username, 
-                                 is_live=is_live,
-                                 last_check=current_time)
-                    
-                    if is_live:
-                        logger.info(f"🔴 {username} is LIVE!")
-                        
-                        # Start recording if not already recording
-                        if username not in recording_threads:
-                            thread = threading.Thread(
-                                target=record_user_stream,
-                                args=(username, checker, recorder, uploader),
-                                daemon=True
-                            )
-                            thread.start()
-                            recording_threads[username] = thread
-                            logger.info(f"🎬 Started recording {username}")
-                        else:
-                            logger.info(f"📹 Already recording {username}")
-                    else:
-                        logger.debug(f"⚪ {username} is offline")
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error checking {username}: {e}")
-                    update_status(username, error=str(e))
-                
-                # Small delay between user checks
-                time.sleep(user_check_interval)
-            
-            # Wait before next cycle
-            logger.info(f"⏱️ Waiting {check_interval}s before next cycle...")
-            time.sleep(check_interval)
-            
-        except Exception as e:
-            logger.error(f"❌ Error in monitoring loop: {e}")
-            time.sleep(60)
-    
-    logger.info("🛑 Monitoring loop stopped")
-
-# Routes
 @app.route('/')
-def home():
-    """Home page - redirect to authorization or status"""
-    if drive_service:
-        return redirect(url_for('status'))
-    else:
-        return redirect(url_for('authorize'))
-
-@app.route('/status')
-def status():
+def index():
     """Main dashboard"""
-    usernames = load_usernames()
-    user_data = []
+    users = recorder.load_users()
     
-    for username in usernames:
-        data = status_tracker.get(username, {})
-        data['username'] = username
-        data['is_recording'] = username in recording_threads
+    # Update live status and recording info
+    status_info = {}
+    for user in users:
+        status_info[user] = {
+            'live': live_status.get(user, False),
+            'recording': user in recording_processes,
+            'folder_exists': os.path.exists(os.path.join(recorder.recordings_dir, user))
+        }
         
-        # Format timestamps
-        for field in ['last_updated', 'last_check', 'recording_start', 'recording_end']:
-            if field in data and data[field]:
-                try:
-                    dt = datetime.fromisoformat(data[field].replace('Z', '+00:00'))
-                    data[f'{field}_formatted'] = dt.strftime('%Y-%m-%d %H:%M:%S')
-                except:
-                    pass
-        
-        user_data.append(data)
-    
-    return render_template('status.html', 
-                         users=user_data,
-                         monitoring_active=monitoring_active,
-                         drive_connected=bool(drive_service),
-                         total_recordings=len(recording_threads))
-
-@app.route('/api/status')
-def api_status():
-    """API endpoint for status data"""
-    usernames = load_usernames()
-    user_data = []
-    
-    for username in usernames:
-        data = status_tracker.get(username, {})
-        data['username'] = username
-        data['is_recording'] = username in recording_threads
-        user_data.append(data)
-    
-    return jsonify({
-        'users': user_data,
-        'monitoring_active': monitoring_active,
-        'drive_connected': bool(drive_service),
-        'total_recordings': len(recording_threads),
-        'timestamp': datetime.now().isoformat()
-    })
-
-@app.route('/auth/google')
-def auth_google():
-    """Start Google OAuth flow"""
-    try:
-        if not GOOGLE_AUTH_AVAILABLE:
-            return "❌ Google Auth libraries not available. Please check dependencies.", 500
+        # Add recording details if active
+        if user in recording_processes:
+            rec_info = recording_processes[user]
+            duration = datetime.now() - rec_info['start_time']
+            filepath = rec_info['filepath']
+            file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
             
-        creds_info = load_google_credentials()
-        if not creds_info:
-            return "❌ Google credentials not found. Please add credentials.json file.", 500
-        
-        # Get the redirect URI from environment or construct it
-        redirect_uri = os.environ.get('OAUTH_REDIRECT_URI')
-        if not redirect_uri:
-            # Auto-detect based on request
-            if request.host.endswith('.onrender.com'):
-                redirect_uri = f"https://{request.host}/oauth2callback"
-            else:
-                redirect_uri = f"{request.scheme}://{request.host}/oauth2callback"
-        
-        logger.info(f"🔗 Using OAuth redirect URI: {redirect_uri}")
-        
-        flow = Flow.from_client_config(
-            creds_info,
-            scopes=['https://www.googleapis.com/auth/drive.file'],
-            redirect_uri=redirect_uri
+            status_info[user].update({
+                'duration': str(duration).split('.')[0],  # Remove microseconds
+                'file_size': f"{file_size / 1024 / 1024:.2f} MB" if file_size > 0 else "0 MB",
+                'filename': rec_info['filename']
+            })
+    
+    # Check Google Drive authorization
+    drive_authorized = 'credentials' in session
+    
+    return render_template('index.html', 
+                         users=users, 
+                         status_info=status_info,
+                         drive_authorized=drive_authorized,
+                         config_loaded=config['client_id'] is not None)
+
+@app.route('/add_user', methods=['POST'])
+def add_user():
+    """Add a new user"""
+    username = request.form.get('username', '').strip()
+    
+    if username:
+        success = recorder.add_user(username)
+        if success:
+            flash(f"✅ Added user: @{username}", 'success')
+        else:
+            flash(f"⚠️ User @{username} already exists", 'warning')
+    else:
+        flash("❌ Please enter a valid username", 'error')
+    
+    return redirect(url_for('index'))
+
+@app.route('/remove_user', methods=['POST'])
+def remove_user():
+    """Remove a user"""
+    username = request.form.get('username', '').strip()
+    
+    if username:
+        success = recorder.remove_user(username)
+        if success:
+            flash(f"🗑️ Removed user: @{username}", 'success')
+        else:
+            flash(f"❌ User @{username} not found", 'error')
+    
+    return redirect(url_for('index'))
+
+@app.route('/authorize')
+def authorize():
+    """Start Google OAuth flow"""
+    if not config['client_id']:
+        flash("❌ Google OAuth not configured. Please add credentials.json", 'error')
+        return redirect(url_for('index'))
+    
+    try:
+        flow = Flow.from_client_secrets_file(
+            CLIENT_SECRETS_FILE,
+            scopes=SCOPES,
+            redirect_uri=url_for('oauth_callback', _external=True)
         )
         
         authorization_url, state = flow.authorization_url(
@@ -673,177 +522,666 @@ def auth_google():
         )
         
         session['state'] = state
-        session['redirect_uri'] = redirect_uri
         return redirect(authorization_url)
         
     except Exception as e:
-        logger.error(f"❌ OAuth initiation error: {e}")
-        return f"Authorization setup failed: {e}", 500
+        logging.error(f"❌ OAuth error: {e}")
+        flash(f"❌ OAuth setup error: {e}", 'error')
+        return redirect(url_for('index'))
 
-@app.route('/oauth2callback')
-def oauth2callback():
-    """Handle OAuth callback and auto-start monitoring"""
-    global drive_service, monitoring_thread
-    
+@app.route('/oauth_callback')
+def oauth_callback():
+    """Handle OAuth callback"""
     try:
-        if not GOOGLE_AUTH_AVAILABLE:
-            return "❌ Google Auth libraries not available. Please check dependencies.", 500
-            
-        creds_info = load_google_credentials()
-        redirect_uri = session.get('redirect_uri')
-        
-        flow = Flow.from_client_config(
-            creds_info,
-            scopes=['https://www.googleapis.com/auth/drive.file'],
-            redirect_uri=redirect_uri
+        flow = Flow.from_client_secrets_file(
+            CLIENT_SECRETS_FILE,
+            scopes=SCOPES,
+            redirect_uri=url_for('oauth_callback', _external=True)
         )
         
         flow.fetch_token(authorization_response=request.url)
+        
         credentials = flow.credentials
+        session['credentials'] = {
+            'token': credentials.token,
+            'refresh_token': credentials.refresh_token,
+            'token_uri': credentials.token_uri,
+            'client_id': credentials.client_id,
+            'client_secret': credentials.client_secret,
+            'scopes': credentials.scopes
+        }
         
-        # Initialize Drive service
-        drive_service = build('drive', 'v3', credentials=credentials)
-        
-        # Test the connection
-        about = drive_service.about().get(fields="user").execute()
-        user_email = about.get('user', {}).get('emailAddress', 'Unknown')
-        logger.info(f"✅ Google Drive connected successfully for {user_email}")
-        
-        # Auto-start monitoring after successful authorization
-        if not monitoring_active and monitoring_thread is None:
-            monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
-            monitoring_thread.start()
-            logger.info("🚀 Auto-started monitoring after authorization")
-        
-        return redirect(url_for('status'))
+        flash("✅ Google Drive authorized successfully!", 'success')
+        logging.info("✅ Google Drive authorization completed")
         
     except Exception as e:
-        logger.error(f"❌ OAuth callback error: {e}")
-        return f"Authorization failed: {e}", 500
-
-@app.route('/authorize')
-def authorize():
-    """Authorization page"""
-    usernames = load_usernames()  # Load usernames to display on auth page
-    return render_template('authorize.html', 
-                         drive_connected=bool(drive_service),
-                         usernames=usernames)
-
-@app.route('/start_monitoring', methods=['POST'])
-def start_monitoring():
-    """Manually start monitoring"""
-    global monitoring_active, monitoring_thread
+        logging.error(f"❌ OAuth callback error: {e}")
+        flash(f"❌ Authorization failed: {e}", 'error')
     
-    if not monitoring_active:
-        monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
-        monitoring_thread.start()
-        logger.info("🚀 Monitoring started manually")
-        return jsonify({'success': True, 'message': 'Monitoring started'})
-    else:
-        return jsonify({'success': True, 'message': 'Monitoring already active'})
+    return redirect(url_for('index'))
 
-@app.route('/stop_monitoring', methods=['POST'])
-def stop_monitoring():
-    """Stop monitoring"""
-    global monitoring_active
-    monitoring_active = False
-    logger.info("🛑 Monitoring stopped")
-    return jsonify({'success': True, 'message': 'Monitoring stopped'})
+@app.route('/revoke')
+def revoke():
+    """Revoke Google Drive authorization"""
+    if 'credentials' in session:
+        del session['credentials']
+        flash("🔓 Google Drive authorization revoked", 'info')
+    return redirect(url_for('index'))
 
-@app.route('/add_user', methods=['POST'])
-def add_user():
-    """Add new user to monitor"""
-    username = request.form.get('username', '').strip().replace('@', '')
-    if not username:
-        return jsonify({'error': 'Username required'}), 400
+@app.route('/status')
+def status():
+    """Get current status as JSON"""
+    users = recorder.load_users()
+    status_data = {
+        'users': [],
+        'drive_authorized': 'credentials' in session,
+        'total_users': len(users),
+        'live_users': sum(1 for user in users if live_status.get(user, False)),
+        'recording_users': len(recording_processes)
+    }
     
-    try:
-        usernames = load_usernames()
-        if username not in usernames:
-            usernames.append(username)
-            if save_usernames(usernames):
-                logger.info(f"➕ Added user: {username}")
-                
-                # Create folder structure for new user if Drive is connected
-                if drive_service:
-                    uploader = GoogleDriveUploader(drive_service)
-                    uploader.create_user_folders([username])
-                    
+    for user in users:
+        user_info = {
+            'username': user,
+            'live': live_status.get(user, False),
+            'recording': user in recording_processes,
+            'folder_exists': os.path.exists(os.path.join(recorder.recordings_dir, user))
+        }
+        
+        if user in recording_processes:
+            rec_info = recording_processes[user]
+            duration = datetime.now() - rec_info['start_time']
+            filepath = rec_info['filepath']
+            file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+            
+            user_info.update({
+                'duration': str(duration).split('.')[0],
+                'file_size_mb': round(file_size / 1024 / 1024, 2),
+                'filename': rec_info['filename']
+            })
+        
+        status_data['users'].append(user_info)
+    
+    return jsonify(status_data)
+
+def check_all_users():
+    """Check all users for live status and start/stop recordings"""
+    users = recorder.load_users()
+    logging.info(f"🔍 Checking {len(users)} users...")
+    
+    for user in users:
+        try:
+            logging.info(f"🔍 Checking live status for @{user}")
+            is_live = recorder.check_live_status_improved(user)
+            live_status[user] = is_live
+            
+            if is_live:
+                logging.info(f"🔴 {user} is LIVE!")
+                if user not in recording_processes:
+                    logging.info(f"🎬 Starting recording for {user}")
+                    success = recorder.start_recording(user)
+                    if success:
+                        logging.info(f"✅ Recording started for {user}")
+                    else:
+                        logging.error(f"❌ Failed to start recording for {user}")
+                else:
+                    # Check if recording is still active
+                    process = recording_processes[user]['process']
+                    if process.poll() is not None:
+                        logging.warning(f"⚠️ Recording process died for {user}, restarting...")
+                        del recording_processes[user]
+                        recorder.start_recording(user)
+                    else:
+                        logging.info(f"📹 Continue recording {user}")
             else:
-                logger.error(f"❌ Failed to save username: {username}")
-                return jsonify({'error': 'Failed to save username'}), 500
-        else:
-            logger.info(f"ℹ️ User {username} already exists")
-        
-        return redirect(url_for('status'))
-    except Exception as e:
-        logger.error(f"❌ Error adding user: {e}")
-        return jsonify({'error': str(e)}), 500
+                logging.info(f"❌ {user} is not live")
+                if user in recording_processes:
+                    logging.info(f"🛑 Stopping recording for {user}")
+                    recorder.stop_recording(user)
+            
+            # Small delay between checks
+            time.sleep(2)
+            
+        except Exception as e:
+            logging.error(f"❌ Error checking {user}: {e}")
+            live_status[user] = False
 
-@app.route('/remove_user', methods=['POST'])
-def remove_user():
-    """Remove user from monitoring"""
-    username = request.form.get('username', '').strip().replace('@', '')
-    if not username:
-        return jsonify({'error': 'Username required'}), 400
+def monitoring_loop():
+    """Main monitoring loop"""
+    logging.info("🔄 Auto-monitoring started")
     
-    try:
-        usernames = load_usernames()
-        if username in usernames:
-            usernames.remove(username)
-            if save_usernames(usernames):
-                logger.info(f"➖ Removed user: {username}")
-                
-                # Stop recording if active
-                if username in recording_threads:
-                    del recording_threads[username]
-                
-                # Remove from status tracker
-                if username in status_tracker:
-                    del status_tracker[username]
-            else:
-                logger.error(f"❌ Failed to remove username: {username}")
-                return jsonify({'error': 'Failed to remove username'}), 500
-        else:
-            logger.info(f"ℹ️ User {username} not found")
+    while True:
+        try:
+            check_all_users()
+            logging.info("⏱️ Waiting 30s before next cycle...")
+            time.sleep(30)
+        except KeyboardInterrupt:
+            logging.info("⏹️ Monitoring stopped by user")
+            break
+        except Exception as e:
+            logging.error(f"❌ Error in monitoring loop: {e}")
+            time.sleep(10)  # Wait a bit before retrying
+
+def signal_handler(sig, frame):
+    """Handle shutdown signals"""
+    logging.info("🛑 Shutdown signal received")
+    
+    # Stop all recordings
+    for username in list(recording_processes.keys()):
+        recorder.stop_recording(username)
+    
+    sys.exit(0)
+
+# HTML Template
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Live Recorder - Final Version</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
         
-        return redirect(url_for('status'))
-    except Exception as e:
-        logger.error(f"❌ Error removing user: {e}")
-        return jsonify({'error': str(e)}), 500
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #333;
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .status-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .status-card {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            transform: translateY(0);
+            transition: transform 0.3s ease;
+        }
+        
+        .status-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .status-card.drive {
+            background: linear-gradient(45deg, #4285f4, #34a853);
+        }
+        
+        .status-card.config {
+            background: linear-gradient(45deg, #9c88ff, #8c7ae6);
+        }
+        
+        .status-card.recording {
+            background: linear-gradient(45deg, #ff9ff3, #f368e0);
+        }
+        
+        .control-section {
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.05);
+        }
+        
+        .control-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+        
+        .form-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        
+        .form-group input {
+            flex: 1;
+            min-width: 200px;
+            padding: 12px 15px;
+            border: 2px solid #e1e8ed;
+            border-radius: 25px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+        }
+        
+        .btn-success {
+            background: linear-gradient(45deg, #2ed573, #1e90ff);
+            color: white;
+        }
+        
+        .users-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .user-card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            border-left: 5px solid #ddd;
+            transition: all 0.3s ease;
+        }
+        
+        .user-card.live {
+            border-left-color: #ff6b6b;
+            animation: pulse 2s infinite;
+        }
+        
+        .user-card.recording {
+            border-left-color: #2ed573;
+            background: linear-gradient(135deg, #f8fff8 0%, #e8f5e8 100%);
+        }
+        
+        @keyframes pulse {
+            0% { box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1); }
+            50% { box-shadow: 0 10px 30px rgba(255, 107, 107, 0.3); }
+            100% { box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1); }
+        }
+        
+        .user-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .username {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .status-badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-badge.live {
+            background: #ff6b6b;
+            color: white;
+        }
+        
+        .status-badge.offline {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .status-badge.recording {
+            background: #2ed573;
+            color: white;
+            animation: blink 1s infinite;
+        }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.7; }
+        }
+        
+        .user-info {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+        
+        .user-info .info-item {
+            margin-bottom: 5px;
+        }
+        
+        .recording-details {
+            background: rgba(46, 213, 115, 0.1);
+            border-radius: 10px;
+            padding: 10px;
+            margin-top: 10px;
+            border: 1px solid rgba(46, 213, 115, 0.3);
+        }
+        
+        .remove-btn {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        
+        .remove-btn:hover {
+            background: #c0392b;
+        }
+        
+        .flash-messages {
+            margin-bottom: 20px;
+        }
+        
+        .flash-message {
+            padding: 12px 20px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+        
+        .flash-message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .flash-message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .flash-message.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .flash-message.info {
+            background: #cce7ff;
+            color: #004085;
+            border: 1px solid #99d6ff;
+        }
+        
+        .auto-refresh {
+            text-align: center;
+            margin-top: 20px;
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+                margin: 10px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .status-cards {
+                grid-template-columns: 1fr;
+            }
+            
+            .form-group {
+                flex-direction: column;
+            }
+            
+            .form-group input {
+                min-width: auto;
+            }
+        }
+    </style>
+    <script>
+        // Auto-refresh every 10 seconds
+        setInterval(function() {
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    updateStatus(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching status:', error);
+                });
+        }, 10000);
+        
+        function updateStatus(data) {
+            // Update status cards
+            document.getElementById('total-users').textContent = data.total_users;
+            document.getElementById('live-users').textContent = data.live_users;
+            document.getElementById('recording-users').textContent = data.recording_users;
+            
+            // Update drive status
+            const driveStatus = document.getElementById('drive-status');
+            if (data.drive_authorized) {
+                driveStatus.textContent = 'Authorized ✅';
+                driveStatus.style.color = '#2ed573';
+            } else {
+                driveStatus.textContent = 'Not Authorized ❌';
+                driveStatus.style.color = '#ff6b6b';
+            }
+            
+            // Update last check time
+            document.getElementById('last-check').textContent = new Date().toLocaleTimeString();
+        }
+        
+        function confirmRemove(username) {
+            return confirm(`Are you sure you want to remove @${username}?`);
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎬 TikTok Live Recorder</h1>
+            <p>Autonomous live stream monitoring and recording system</p>
+        </div>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="flash-message {{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        
+        <div class="status-cards">
+            <div class="status-card">
+                <h3>👥 Total Users</h3>
+                <h2 id="total-users">{{ users|length }}</h2>
+            </div>
+            <div class="status-card recording">
+                <h3>🔴 Live Users</h3>
+                <h2 id="live-users">{{ status_info.values() | selectattr('live') | list | length }}</h2>
+            </div>
+            <div class="status-card drive">
+                <h3>📹 Recording</h3>
+                <h2 id="recording-users">{{ status_info.values() | selectattr('recording') | list | length }}</h2>
+            </div>
+            <div class="status-card config">
+                <h3>☁️ Google Drive</h3>
+                <p id="drive-status">
+                    {% if drive_authorized %}
+                        Authorized ✅
+                    {% else %}
+                        Not Authorized ❌
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+        
+        {% if not config_loaded %}
+        <div class="control-section" style="background: #ffe6e6; border: 2px solid #ff6b6b;">
+            <h2>⚠️ Configuration Required</h2>
+            <p>Please add your <strong>credentials.json</strong> file to enable Google OAuth and full functionality.</p>
+        </div>
+        {% endif %}
+        
+        <div class="control-section">
+            <h2>👤 User Management</h2>
+            <form method="POST" action="/add_user">
+                <div class="form-group">
+                    <input type="text" name="username" placeholder="Enter TikTok username (e.g., @username)" required>
+                    <button type="submit" class="btn btn-primary">➕ Add User</button>
+                </div>
+            </form>
+            
+            {% if not drive_authorized and config_loaded %}
+            <div style="margin-top: 20px;">
+                <a href="/authorize" class="btn btn-success">🔐 Authorize Google Drive</a>
+            </div>
+            {% elif drive_authorized %}
+            <div style="margin-top: 20px;">
+                <a href="/revoke" class="btn btn-danger">🔓 Revoke Google Drive Access</a>
+            </div>
+            {% endif %}
+        </div>
+        
+        <div class="control-section">
+            <h2>📊 User Status</h2>
+            {% if users %}
+                <div class="users-grid">
+                    {% for user in users %}
+                    <div class="user-card {% if status_info[user].live %}live{% endif %} {% if status_info[user].recording %}recording{% endif %}">
+                        <div class="user-header">
+                            <span class="username">@{{ user }}</span>
+                            <div>
+                                {% if status_info[user].live %}
+                                    <span class="status-badge live">🔴 LIVE</span>
+                                {% else %}
+                                    <span class="status-badge offline">⚪ OFFLINE</span>
+                                {% endif %}
+                                
+                                {% if status_info[user].recording %}
+                                    <span class="status-badge recording">🎬 REC</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        
+                        <div class="user-info">
+                            <div class="info-item">
+                                📁 Folder: {% if status_info[user].folder_exists %}✅ Created{% else %}❌ Missing{% endif %}
+                            </div>
+                            
+                            {% if status_info[user].recording %}
+                            <div class="recording-details">
+                                <div class="info-item"><strong>📹 Recording Active</strong></div>
+                                <div class="info-item">⏱️ Duration: {{ status_info[user].duration }}</div>
+                                <div class="info-item">💾 Size: {{ status_info[user].file_size }}</div>
+                                <div class="info-item">📄 File: {{ status_info[user].filename }}</div>
+                            </div>
+                            {% endif %}
+                        </div>
+                        
+                        <form method="POST" action="/remove_user" style="margin-top: 15px;" onsubmit="return confirmRemove('{{ user }}')">
+                            <input type="hidden" name="username" value="{{ user }}">
+                            <button type="submit" class="remove-btn">🗑️ Remove</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div style="text-align: center; padding: 40px; color: #666;">
+                    <h3>No users added yet</h3>
+                    <p>Add some TikTok usernames to start monitoring live streams!</p>
+                </div>
+            {% endif %}
+        </div>
+        
+        <div class="auto-refresh">
+            🔄 Auto-refreshing every 10 seconds | Last check: <span id="last-check">{{ moment().format('HH:mm:ss') }}</span>
+        </div>
+    </div>
+</body>
+</html>
+'''
 
-@app.route('/health')
-def health():
-    """Health check endpoint for Render"""
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'monitoring_active': monitoring_active,
-        'active_recordings': len(recording_threads),
-        'drive_connected': bool(drive_service),
-        'usernames_count': len(load_usernames())
-    })
-
-@app.route('/api/usernames')
-def api_usernames():
-    """API endpoint to get current usernames"""
-    return jsonify({
-        'usernames': load_usernames(),
-        'count': len(load_usernames())
-    })
+# Save template
+os.makedirs('templates', exist_ok=True)
+with open('templates/index.html', 'w') as f:
+    f.write(HTML_TEMPLATE)
 
 if __name__ == '__main__':
-    # Get port from environment variable (required for Render)
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Create initial folder structures for existing users
+    users = recorder.load_users()
+    if users:
+        logging.info(f"📁 Creating folder structure for {len(users)} users...")
+        for user in users:
+            recorder.create_user_folder(user)
+        logging.info("✅ All folder structures created successfully")
+    
+    # Start monitoring in a separate thread
+    monitor_thread = threading.Thread(target=monitoring_loop, daemon=True)
+    monitor_thread.start()
+    logging.info("🔄 Auto-commit scheduler started")
+    
+    # Get port from environment (for Render deployment)
     port = int(os.environ.get('PORT', 5000))
     
-    logger.info("🚀 Starting TikTok Livestream Recorder")
-    logger.info(f"🌐 Running on port {port}")
-    
-    usernames = load_usernames()
-    logger.info(f"👥 Monitoring {len(usernames)} users: {', '.join(usernames) if usernames else 'None'}")
-    
-    if not load_google_credentials():
-        logger.warning("⚠️ Google credentials not found - Google Drive features will be disabled")
-    
     # Run Flask app
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
