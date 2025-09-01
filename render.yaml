@@ -1,15 +1,15 @@
 services:
   - type: web
     name: tiktok-livestream-recorder
-    env: python
-    plan: free
+    runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python wsgi.py
+    startCommand: python app.py
     envVars:
       - key: PORT
-        fromService:
-          name: tiktok-livestream-recorder
-          type: web
+        value: 10000
+      - key: PYTHON_VERSION
+        value: 3.13.4
+          property: port
           property: port
       - key: PYTHON_VERSION
         value: 3.13.4
