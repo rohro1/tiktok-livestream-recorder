@@ -399,14 +399,5 @@ if __name__ == '__main__':
     except Exception as e:
         logger.warning(f"Could not load existing credentials: {e}")
 
-    # Production port handling
-    port = int(os.environ.get('PORT', 10000))
-    logger.info(f"Starting server on port {port}")
-    
-    # Production mode
-    app.run(
-        host='0.0.0.0',
-        port=port,
-        debug=False,
-        use_reloader=False
-    )
+    # Development server
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)), debug=True)
