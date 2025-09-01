@@ -399,5 +399,5 @@ if __name__ == '__main__':
     except Exception as e:
         logger.warning(f"Could not load existing credentials: {e}")
 
-    # Development server
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)), debug=True)
+    # Let app.py handle server startup
+    app.run(debug=True)
