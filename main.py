@@ -1,41 +1,38 @@
 
-#!/usr/bin/env python3
-"""
-TikTok Livestream Recorder - Complete Working Implementation
-Uses credentials.json from secrets, fully autonomous operation
-"""
-
 import os
 import json
-import threading
 import time
-import subprocess
-import requests
-from datetime import datetime
-from flask import Flask, render_template, jsonify, request, redirect, url_for, session
+import threading
 import logging
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+from google.oauth2.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+import requests
 import yt_dlp
+import subprocess
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'tiktok-recorder-secret-key-2025')
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-here')
 
-# Global state
-recording_threads = {}
+# Global variables
 monitoring_active = False
-status_tracker = {}
-drive_service = None
 monitoring_thread = None
+drive_service = None
+status_tracker = {}
+recording_threads = {}
 
 class TikTokChecker:
     """Reliable TikTok live status checker"""
@@ -94,93 +91,76 @@ class TikTokChecker:
             return False
 
 class StreamRecorder:
-    """Records TikTok livestreams"""
+    """Record TikTok livestreams"""
+    
+    def __init__(self):
+        self.recordings_dir = "recordings"
+        os.makedirs(self.recordings_dir, exist_ok=True)
     
     def record_stream(self, username):
-        """Record livestream using yt-dlp"""
+        """Record a TikTok livestream"""
         try:
-            # Create output directory
-            output_dir = os.path.join('recordings', username)
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # Generate filename with timestamp
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_file = os.path.join(output_dir, f'{username}_{timestamp}.mp4')
+            output_file = os.path.join(self.recordings_dir, f"{username}_{timestamp}.mp4")
             
-            # Use yt-dlp to record the livestream
             live_url = f"https://www.tiktok.com/@{username}/live"
             
+            # Use yt-dlp to get stream URL and record with ffmpeg
             ydl_opts = {
-                'outtmpl': output_file,
-                'format': 'best[height<=480]/best',  # 480p max
-                'quiet': False,
-                'no_warnings': False,
-                'live_from_start': True,
+                'quiet': True,
+                'no_warnings': True,
+                'format': 'best[height<=480]',
             }
             
-            logger.info(f"Starting recording for {username} -> {output_file}")
-            
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([live_url])
-            
-            # Check if file was created successfully
-            if os.path.exists(output_file) and os.path.getsize(output_file) > 1024:
-                logger.info(f"Recording completed: {output_file} ({os.path.getsize(output_file)} bytes)")
-                return output_file
-            else:
-                logger.error(f"Recording failed or file too small for {username}")
-                if os.path.exists(output_file):
-                    os.remove(output_file)
-                return None
-                
+                info = ydl.extract_info(live_url, download=False)
+                if info and 'url' in info:
+                    stream_url = info['url']
+                    
+                    # Record with ffmpeg
+                    cmd = [
+                        'ffmpeg',
+                        '-i', stream_url,
+                        '-c', 'copy',
+                        '-t', '3600',  # Max 1 hour
+                        '-y',  # Overwrite output files
+                        output_file
+                    ]
+                    
+                    logger.info(f"Starting recording for {username}")
+                    process = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+                    
+                    if process.returncode == 0 and os.path.exists(output_file):
+                        logger.info(f"Recording completed: {output_file}")
+                        return output_file
+                    else:
+                        logger.error(f"Recording failed for {username}: {process.stderr}")
+                        return None
+                        
         except Exception as e:
-            logger.error(f"Error recording {username}: {e}")
+            logger.error(f"Recording error for {username}: {e}")
             return None
 
 class GoogleDriveUploader:
-    """Handles Google Drive uploads with folder structure"""
+    """Upload files to Google Drive"""
     
     def __init__(self, service):
         self.service = service
     
-    def create_folder(self, name, parent_id='root'):
-        """Create folder in Google Drive"""
-        try:
-            folder_metadata = {
-                'name': name,
-                'mimeType': 'application/vnd.google-apps.folder',
-                'parents': [parent_id]
-            }
-            folder = self.service.files().create(body=folder_metadata).execute()
-            return folder.get('id')
-        except Exception as e:
-            logger.error(f"Error creating folder {name}: {e}")
-            return None
-    
-    def find_folder(self, name, parent_id='root'):
-        """Find existing folder by name"""
-        try:
-            query = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and '{parent_id}' in parents"
-            results = self.service.files().list(q=query).execute()
-            items = results.get('files', [])
-            return items[0]['id'] if items else None
-        except Exception as e:
-            logger.error(f"Error finding folder {name}: {e}")
-            return None
-    
     def upload_video(self, file_path, username):
-        """Upload video with structured folder organization"""
+        """Upload video file to Google Drive"""
         try:
-            # Get or create username folder
-            username_folder_id = self.find_folder(username)
-            if not username_folder_id:
-                username_folder_id = self.create_folder(username)
+            if not self.service:
+                logger.error("Google Drive service not initialized")
+                return None
             
-            # Get or create date folder
-            date_str = datetime.now().strftime('%Y-%m-%d')
-            date_folder_id = self.find_folder(date_str, username_folder_id)
-            if not date_folder_id:
-                date_folder_id = self.create_folder(date_str, username_folder_id)
+            # Create folder structure: TikTok Recordings/username/YYYY-MM
+            date_folder = datetime.now().strftime('%Y-%m')
+            
+            # Find or create main folder
+            main_folder_id = self._get_or_create_folder('TikTok Recordings')
+            user_folder_id = self._get_or_create_folder(username, main_folder_id)
+            date_folder_id = self._get_or_create_folder(date_folder, user_folder_id)
             
             # Upload file
             filename = os.path.basename(file_path)
@@ -192,43 +172,79 @@ class GoogleDriveUploader:
             media = MediaFileUpload(file_path, resumable=True)
             file = self.service.files().create(
                 body=file_metadata,
-                media_body=media
+                media_body=media,
+                fields='id,webViewLink'
             ).execute()
             
-            # Make file viewable
-            file_id = file.get('id')
-            self.service.permissions().create(
-                fileId=file_id,
-                body={'role': 'reader', 'type': 'anyone'}
-            ).execute()
-            
-            drive_url = f"https://drive.google.com/file/d/{file_id}/view"
-            logger.info(f"Uploaded to Drive: {drive_url}")
-            return drive_url
+            logger.info(f"Uploaded {filename} to Google Drive")
+            return file.get('webViewLink')
             
         except Exception as e:
-            logger.error(f"Error uploading to Drive: {e}")
+            logger.error(f"Drive upload error: {e}")
+            return None
+    
+    def _get_or_create_folder(self, name, parent_id=None):
+        """Get existing folder or create new one"""
+        try:
+            # Search for existing folder
+            query = f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
+            if parent_id:
+                query += f" and '{parent_id}' in parents"
+            
+            results = self.service.files().list(q=query).execute()
+            items = results.get('files', [])
+            
+            if items:
+                return items[0]['id']
+            
+            # Create new folder
+            folder_metadata = {
+                'name': name,
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            if parent_id:
+                folder_metadata['parents'] = [parent_id]
+            
+            folder = self.service.files().create(body=folder_metadata, fields='id').execute()
+            return folder.get('id')
+            
+        except Exception as e:
+            logger.error(f"Error creating folder {name}: {e}")
             return None
 
 def load_usernames():
     """Load usernames from file"""
     try:
-        with open('usernames.txt', 'r') as f:
-            usernames = [line.strip().replace('@', '') for line in f if line.strip() and not line.startswith('#')]
-        return usernames
-    except FileNotFoundError:
-        # Create empty file
-        with open('usernames.txt', 'w') as f:
-            f.write("# Add TikTok usernames here (one per line, without @)\n")
+        if os.path.exists('usernames.txt'):
+            with open('usernames.txt', 'r') as f:
+                usernames = [line.strip().replace('@', '') for line in f if line.strip()]
+                return [u for u in usernames if u]
+        return []
+    except Exception as e:
+        logger.error(f"Error loading usernames: {e}")
         return []
 
 def update_status(username, **kwargs):
-    """Thread-safe status updates"""
-    global status_tracker
+    """Update user status in tracker"""
     if username not in status_tracker:
         status_tracker[username] = {}
+    
     status_tracker[username].update(kwargs)
     status_tracker[username]['last_updated'] = datetime.now().isoformat()
+
+def load_google_credentials():
+    """Load Google credentials from credentials.json file"""
+    try:
+        if os.path.exists('credentials.json'):
+            with open('credentials.json', 'r') as f:
+                creds_info = json.load(f)
+                return creds_info
+        else:
+            logger.error("credentials.json not found!")
+            return None
+    except Exception as e:
+        logger.error(f"Error loading credentials: {e}")
+        return None
 
 def record_user_stream(username, checker, recorder, uploader):
     """Record a user's livestream in separate thread"""
@@ -263,14 +279,16 @@ def record_user_stream(username, checker, recorder, uploader):
                     logger.error(f"Drive upload error for {username}: {e}")
         else:
             logger.error(f"Recording failed for {username}")
-            
+        
+        update_status(username, is_recording=False)
+        
     except Exception as e:
-        logger.error(f"Error in recording thread for {username}: {e}")
+        logger.error(f"Recording thread error for {username}: {e}")
+        update_status(username, is_recording=False, error=str(e))
     finally:
-        # Always cleanup
+        # Clean up thread reference
         if username in recording_threads:
             del recording_threads[username]
-        update_status(username, is_recording=False)
 
 def monitoring_loop():
     """Main monitoring loop"""
@@ -336,21 +354,7 @@ def monitoring_loop():
     
     logger.info("Monitoring loop stopped")
 
-def load_google_credentials():
-    """Load Google credentials from secrets"""
-    try:
-        # Check if credentials.json exists in current directory
-        if os.path.exists('credentials.json'):
-            with open('credentials.json', 'r') as f:
-                creds_info = json.load(f)
-                return creds_info
-        else:
-            logger.error("credentials.json not found!")
-            return None
-    except Exception as e:
-        logger.error(f"Error loading credentials: {e}")
-        return None
-
+# Routes
 @app.route('/')
 def home():
     """Home page - redirect to status"""
@@ -386,32 +390,32 @@ def status():
 
 @app.route('/api/status')
 def api_status():
-    """API endpoint for status"""
+    """API endpoint for status data"""
     usernames = load_usernames()
-    users = []
+    user_data = []
     
     for username in usernames:
         data = status_tracker.get(username, {})
         data['username'] = username
         data['is_recording'] = username in recording_threads
-        users.append(data)
+        user_data.append(data)
     
     return jsonify({
-        'users': users,
+        'users': user_data,
         'monitoring_active': monitoring_active,
-        'total_users': len(usernames),
-        'active_recordings': len(recording_threads),
-        'drive_connected': bool(drive_service)
+        'drive_connected': bool(drive_service),
+        'total_recordings': len(recording_threads),
+        'timestamp': datetime.now().isoformat()
     })
 
 @app.route('/auth/google')
 def auth_google():
     """Start Google OAuth flow"""
-    creds_info = load_google_credentials()
-    if not creds_info:
-        return "Error: credentials.json not found", 400
-    
     try:
+        creds_info = load_google_credentials()
+        if not creds_info:
+            return "Google credentials not found. Please add credentials.json file.", 500
+        
         flow = Flow.from_client_config(
             creds_info,
             scopes=['https://www.googleapis.com/auth/drive.file'],
@@ -427,8 +431,8 @@ def auth_google():
         return redirect(authorization_url)
         
     except Exception as e:
-        logger.error(f"OAuth setup error: {e}")
-        return f"OAuth setup error: {e}", 500
+        logger.error(f"OAuth initiation error: {e}")
+        return f"Authorization setup failed: {e}", 500
 
 @app.route('/auth/callback')
 def auth_callback():
@@ -464,6 +468,11 @@ def auth_callback():
     except Exception as e:
         logger.error(f"OAuth callback error: {e}")
         return f"Authorization failed: {e}", 500
+
+@app.route('/authorize')
+def authorize():
+    """Authorization page"""
+    return render_template('authorize.html', drive_connected=bool(drive_service))
 
 @app.route('/start_monitoring', methods=['POST'])
 def start_monitoring():
@@ -506,21 +515,20 @@ def add_user():
 
 @app.route('/health')
 def health():
-    """Health check"""
+    """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
         'monitoring_active': monitoring_active,
-        'drive_connected': bool(drive_service),
         'active_recordings': len(recording_threads)
     })
 
 if __name__ == '__main__':
-    # Create directories
-    os.makedirs('recordings', exist_ok=True)
-    os.makedirs('templates', exist_ok=True)
-    
-    # Get port from environment (for Replit deployment)
+    # Get port from environment variable (required for Render)
     port = int(os.environ.get('PORT', 5000))
     
     logger.info(f"Starting TikTok Livestream Recorder on port {port}")
+    logger.info(f"Monitoring {len(load_usernames())} users")
+    
+    # Run Flask app
     app.run(host='0.0.0.0', port=port, debug=False)
