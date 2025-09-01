@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -19,6 +18,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            padding: 20px;
         }
         
         .container {
@@ -27,13 +27,20 @@
             border-radius: 20px;
             box-shadow: 0 20px 40px rgba(0,0,0,0.1);
             text-align: center;
-            max-width: 500px;
-            width: 90%;
+            max-width: 600px;
+            width: 100%;
         }
         
         .logo {
             font-size: 4em;
             margin-bottom: 20px;
+            animation: bounce 2s infinite;
+        }
+        
+        @keyframes bounce {
+            0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-10px); }
+            60% { transform: translateY(-5px); }
         }
         
         h1 {
@@ -59,6 +66,7 @@
             text-decoration: none;
             display: inline-block;
             transition: all 0.3s ease;
+            margin: 10px;
         }
         
         .button:hover {
@@ -67,9 +75,20 @@
             box-shadow: 0 5px 15px rgba(66, 133, 244, 0.4);
         }
         
+        .button.success {
+            background: #4CAF50;
+        }
+        
+        .button.success:hover {
+            background: #45a049;
+        }
+        
         .features {
             margin-top: 30px;
             text-align: left;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
         }
         
         .feature {
@@ -77,23 +96,111 @@
             align-items: center;
             margin-bottom: 15px;
             color: #555;
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            transition: transform 0.2s ease;
+        }
+        
+        .feature:hover {
+            transform: translateY(-2px);
         }
         
         .feature-icon {
-            margin-right: 10px;
-            font-size: 1.2em;
+            margin-right: 15px;
+            font-size: 1.5em;
+            min-width: 40px;
         }
         
         .status {
             margin-top: 20px;
-            padding: 15px;
-            border-radius: 10px;
+            padding: 20px;
+            border-radius: 15px;
             background: #f0f0f0;
         }
         
         .status.connected {
-            background: #d4edda;
+            background: linear-gradient(135deg, #d4edda, #c3e6cb);
             color: #155724;
+            border: 2px solid #4CAF50;
+        }
+        
+        .usernames-preview {
+            margin-top: 30px;
+            text-align: left;
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 15px;
+        }
+        
+        .usernames-list {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+        
+        .username-item {
+            background: white;
+            padding: 8px 12px;
+            margin: 5px 0;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            font-family: monospace;
+        }
+        
+        .no-usernames {
+            color: #666;
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .add-user-form {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .add-user-form input {
+            flex: 1;
+            min-width: 200px;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+        
+        .add-user-form input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .stat-item {
+            text-align: center;
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+        }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            display: block;
+        }
+        
+        .stat-label {
+            font-size: 0.8em;
+            opacity: 0.8;
         }
     </style>
 </head>
@@ -103,39 +210,127 @@
         <h1>TikTok Livestream Recorder</h1>
         <p class="description">
             Automatically monitor TikTok users and record their livestreams. 
-            All recordings are automatically uploaded to your Google Drive.
+            All recordings are automatically uploaded to your Google Drive with organized folder structure.
         </p>
         
         {% if drive_connected %}
             <div class="status connected">
-                ✅ Google Drive is already connected!
+                ✅ <strong>Google Drive Connected!</strong>
                 <br><br>
-                <a href="/status" class="button">Go to Dashboard</a>
+                🚀 Monitoring will start automatically after authorization.
+                <br>
+                📁 Folder structure will be created for all users.
+                <br><br>
+                <a href="/status" class="button success">Go to Dashboard</a>
             </div>
         {% else %}
             <a href="/auth/google" class="button">
-                🔗 Setup Google Drive
+                🔗 Setup Google Drive & Start Monitoring
             </a>
             
             <div class="features">
                 <div class="feature">
                     <span class="feature-icon">🔍</span>
-                    <span>Real-time livestream monitoring</span>
+                    <div>
+                        <strong>Smart Detection</strong><br>
+                        <small>Multiple methods to detect live streams reliably</small>
+                    </div>
                 </div>
                 <div class="feature">
                     <span class="feature-icon">📹</span>
-                    <span>Automatic recording when live</span>
+                    <div>
+                        <strong>Auto Recording</strong><br>
+                        <small>Start recording immediately when user goes live</small>
+                    </div>
                 </div>
                 <div class="feature">
                     <span class="feature-icon">☁️</span>
-                    <span>Auto-upload to Google Drive</span>
+                    <div>
+                        <strong>Cloud Backup</strong><br>
+                        <small>Upload to Drive with organized folders</small>
+                    </div>
                 </div>
                 <div class="feature">
                     <span class="feature-icon">📱</span>
-                    <span>Web dashboard for monitoring</span>
+                    <div>
+                        <strong>Real-time Dashboard</strong><br>
+                        <small>Monitor all users with live status updates</small>
+                    </div>
                 </div>
             </div>
         {% endif %}
+        
+        <div class="usernames-preview">
+            <h3>👥 Current Monitored Users</h3>
+            {% if usernames %}
+                <div class="stats">
+                    <div class="stat-item" style="background: linear-gradient(135deg, #667eea, #764ba2);">
+                        <span class="stat-value">{{ usernames|length }}</span>
+                        <span class="stat-label">Users</span>
+                    </div>
+                </div>
+                <div class="usernames-list">
+                    {% for username in usernames %}
+                    <div class="username-item">@{{ username }}</div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="no-usernames">
+                    📭 No users added yet. Add some usernames below to start monitoring!
+                </div>
+            {% endif %}
+            
+            <div class="add-user-form">
+                <form action="/add_user" method="post" style="display: flex; gap: 10px; width: 100%;">
+                    <input type="text" 
+                           name="username" 
+                           placeholder="Enter TikTok username (without @)" 
+                           required>
+                    <button type="submit" class="button">➕ Add User</button>
+                </form>
+            </div>
+        </div>
+        
+        <div style="margin-top: 30px; padding: 20px; background: rgba(255,255,255,0.1); border-radius: 15px; color: white;">
+            <h4>🔧 Setup Instructions:</h4>
+            <ol style="text-align: left; margin-top: 15px; line-height: 1.8;">
+                <li>Add TikTok usernames you want to monitor above</li>
+                <li>Click "Setup Google Drive" to authorize cloud storage</li>
+                <li>Monitoring will start automatically after authorization</li>
+                <li>View real-time status on the dashboard</li>
+            </ol>
+        </div>
     </div>
+    
+    <script>
+        // Auto-refresh usernames every 30 seconds
+        setInterval(function() {
+            fetch('/api/usernames')
+                .then(response => response.json())
+                .then(data => {
+                    // Refresh page if username count changed
+                    const currentCount = {{ usernames|length if usernames else 0 }};
+                    if (data.count !== currentCount) {
+                        location.reload();
+                    }
+                })
+                .catch(error => console.log('Auto-refresh error:', error));
+        }, 30000);
+        
+        // Form validation
+        document.querySelector('form').addEventListener('submit', function(e) {
+            const input = this.querySelector('input[name="username"]');
+            const username = input.value.trim().replace('@', '');
+            
+            if (username.length < 3) {
+                alert('Username must be at least 3 characters long');
+                e.preventDefault();
+                return;
+            }
+            
+            // Clean the input
+            input.value = username;
+        });
+    </script>
 </body>
 </html>
