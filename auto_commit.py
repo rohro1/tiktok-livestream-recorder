@@ -79,7 +79,8 @@ def setup_git_config():
         'git config user.name "TikTok Recorder Bot"',
         'git config user.email "recorder@github-actions.com"',
         'git config push.default simple',
-        'git config pull.rebase false'
+        'git config pull.rebase false',
+        'git config --global --add safe.directory "*"'
     ]
     
     for cmd in commands:

@@ -6,10 +6,19 @@ import threading
 import logging
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
-from google.oauth2.flow import Flow
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+try:
+    from google_auth_oauthlib.flow import Flow
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+    GOOGLE_AUTH_AVAILABLE = True
+except ImportError as e:
+    print(f"Google Auth not available: {e}")
+    Flow = None
+    Credentials = None
+    build = None
+    MediaFileUpload = None
+    GOOGLE_AUTH_AVAILABLE = False
 import requests
 import yt_dlp
 import subprocess
@@ -509,6 +518,9 @@ def api_status():
 def auth_google():
     """Start Google OAuth flow"""
     try:
+        if not GOOGLE_AUTH_AVAILABLE:
+            return "❌ Google Auth libraries not available. Please check dependencies.", 500
+            
         creds_info = load_google_credentials()
         if not creds_info:
             return "❌ Google credentials not found. Please add credentials.json file.", 500
@@ -541,6 +553,9 @@ def auth_callback():
     global drive_service, monitoring_thread
     
     try:
+        if not GOOGLE_AUTH_AVAILABLE:
+            return "❌ Google Auth libraries not available. Please check dependencies.", 500
+            
         creds_info = load_google_credentials()
         redirect_uri = session.get('redirect_uri')
         

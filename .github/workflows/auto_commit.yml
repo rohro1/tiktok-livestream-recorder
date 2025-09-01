@@ -13,6 +13,10 @@ on:
       - '*.log'
       - 'usernames.txt'
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   auto-commit:
     runs-on: ubuntu-latest
@@ -23,6 +27,7 @@ jobs:
       with:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
+        persist-credentials: true
     
     - name: Configure Git
       run: |
@@ -30,11 +35,13 @@ jobs:
         git config --global user.email "recorder@github-actions.com"
         git config --global push.default simple
         git config --global pull.rebase false
+        git config --global --add safe.directory "*"
     
-    - name: Clean up git locks
+    - name: Clean up git locks and processes
       run: |
         find .git -name "*.lock" -type f -delete || true
         pkill -f git || true
+        sleep 2
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -49,9 +56,11 @@ jobs:
     - name: Check for changes
       id: check
       run: |
+        git fetch origin main || true
         if [[ -n $(git status --porcelain) ]]; then
           echo "changes=true" >> $GITHUB_OUTPUT
-          echo "Found changes to commit"
+          echo "Found changes to commit:"
+          git status --porcelain
         else
           echo "changes=false" >> $GITHUB_OUTPUT
           echo "No changes found"
@@ -65,8 +74,10 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     
     - name: Force push if needed
-      if: failure()
+      if: failure() && steps.check.outputs.changes == 'true'
       run: |
-        git add .
+        git add . || true
         git commit -m "Force commit: $(date)" || true
         git push origin main --force || true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
