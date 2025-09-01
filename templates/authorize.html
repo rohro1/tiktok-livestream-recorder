@@ -112,19 +112,6 @@
             min-width: 40px;
         }
         
-        .status {
-            margin-top: 20px;
-            padding: 20px;
-            border-radius: 15px;
-            background: #f0f0f0;
-        }
-        
-        .status.connected {
-            background: linear-gradient(135deg, #d4edda, #c3e6cb);
-            color: #155724;
-            border: 2px solid #4CAF50;
-        }
-        
         .usernames-preview {
             margin-top: 30px;
             text-align: left;
@@ -176,32 +163,6 @@
             outline: none;
             border-color: #667eea;
         }
-        
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 15px;
-            margin: 20px 0;
-        }
-        
-        .stat-item {
-            text-align: center;
-            background: rgba(255,255,255,0.1);
-            padding: 15px;
-            border-radius: 10px;
-            color: white;
-        }
-        
-        .stat-value {
-            font-size: 2em;
-            font-weight: bold;
-            display: block;
-        }
-        
-        .stat-label {
-            font-size: 0.8em;
-            opacity: 0.8;
-        }
     </style>
 </head>
 <body>
@@ -213,62 +174,44 @@
             All recordings are automatically uploaded to your Google Drive with organized folder structure.
         </p>
         
-        {% if drive_connected %}
-            <div class="status connected">
-                ✅ <strong>Google Drive Connected!</strong>
-                <br><br>
-                🚀 Monitoring will start automatically after authorization.
-                <br>
-                📁 Folder structure will be created for all users.
-                <br><br>
-                <a href="/status" class="button success">Go to Dashboard</a>
-            </div>
-        {% else %}
-            <a href="/auth/google" class="button">
-                🔗 Setup Google Drive & Start Monitoring
-            </a>
-            
-            <div class="features">
-                <div class="feature">
-                    <span class="feature-icon">🔍</span>
-                    <div>
-                        <strong>Smart Detection</strong><br>
-                        <small>Multiple methods to detect live streams reliably</small>
-                    </div>
-                </div>
-                <div class="feature">
-                    <span class="feature-icon">📹</span>
-                    <div>
-                        <strong>Auto Recording</strong><br>
-                        <small>Start recording immediately when user goes live</small>
-                    </div>
-                </div>
-                <div class="feature">
-                    <span class="feature-icon">☁️</span>
-                    <div>
-                        <strong>Cloud Backup</strong><br>
-                        <small>Upload to Drive with organized folders</small>
-                    </div>
-                </div>
-                <div class="feature">
-                    <span class="feature-icon">📱</span>
-                    <div>
-                        <strong>Real-time Dashboard</strong><br>
-                        <small>Monitor all users with live status updates</small>
-                    </div>
+        <a href="/auth/google" class="button">
+            🔗 Setup Google Drive & Start Monitoring
+        </a>
+        
+        <div class="features">
+            <div class="feature">
+                <span class="feature-icon">🔍</span>
+                <div>
+                    <strong>Smart Detection</strong><br>
+                    <small>Multiple methods to detect live streams reliably</small>
                 </div>
             </div>
-        {% endif %}
+            <div class="feature">
+                <span class="feature-icon">📹</span>
+                <div>
+                    <strong>Auto Recording</strong><br>
+                    <small>Start recording immediately when user goes live</small>
+                </div>
+            </div>
+            <div class="feature">
+                <span class="feature-icon">☁️</span>
+                <div>
+                    <strong>Cloud Backup</strong><br>
+                    <small>Upload to Drive with organized folders</small>
+                </div>
+            </div>
+            <div class="feature">
+                <span class="feature-icon">📱</span>
+                <div>
+                    <strong>Real-time Dashboard</strong><br>
+                    <small>Monitor all users with live status updates</small>
+                </div>
+            </div>
+        </div>
         
         <div class="usernames-preview">
             <h3>👥 Current Monitored Users</h3>
             {% if usernames %}
-                <div class="stats">
-                    <div class="stat-item" style="background: linear-gradient(135deg, #667eea, #764ba2);">
-                        <span class="stat-value">{{ usernames|length }}</span>
-                        <span class="stat-label">Users</span>
-                    </div>
-                </div>
                 <div class="usernames-list">
                     {% for username in usernames %}
                     <div class="username-item">@{{ username }}</div>
@@ -300,23 +243,13 @@
                 <li>View real-time status on the dashboard</li>
             </ol>
         </div>
+        
+        <div style="margin-top: 20px;">
+            <a href="/status" style="color: white; text-decoration: none;">← Back to Dashboard</a>
+        </div>
     </div>
     
     <script>
-        // Auto-refresh usernames every 30 seconds
-        setInterval(function() {
-            fetch('/api/usernames')
-                .then(response => response.json())
-                .then(data => {
-                    // Refresh page if username count changed
-                    const currentCount = {{ usernames|length if usernames else 0 }};
-                    if (data.count !== currentCount) {
-                        location.reload();
-                    }
-                })
-                .catch(error => console.log('Auto-refresh error:', error));
-        }, 30000);
-        
         // Form validation
         document.querySelector('form').addEventListener('submit', function(e) {
             const input = this.querySelector('input[name="username"]');
