@@ -1,6 +1,7 @@
 
 # Add TikTok usernames here (one per line, without @)
+# Remove the # symbol and replace with actual usernames you want to monitor
 # Examples:
 # username1
 # username2
-
+# username3

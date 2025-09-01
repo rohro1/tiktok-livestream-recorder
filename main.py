@@ -7,11 +7,13 @@ import logging
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
 from google.oauth2.flow import Flow
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 import requests
 import yt_dlp
 import subprocess
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -25,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-here')
+app.secret_key = os.environ.get('SECRET_KEY', 'tiktok-recorder-secret-key-2024')
 
 # Global variables
 monitoring_active = False
@@ -35,54 +37,81 @@ status_tracker = {}
 recording_threads = {}
 
 class TikTokChecker:
-    """Reliable TikTok live status checker"""
+    """Enhanced TikTok live status checker with multiple detection methods"""
     
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
         })
     
     def is_live(self, username):
-        """Check if user is currently live using multiple methods"""
+        """Enhanced live detection using multiple methods"""
         try:
-            # Method 1: Check TikTok profile page for live indicator
+            # Method 1: Check TikTok profile API endpoint
+            api_url = f"https://www.tiktok.com/api/user/detail/?uniqueId={username}"
+            try:
+                response = self.session.get(api_url, timeout=15)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('userInfo', {}).get('user', {}).get('liveRoom'):
+                        logger.info(f"✅ API confirms {username} is LIVE")
+                        return True
+            except:
+                pass
+            
+            # Method 2: Check profile page for live indicators
             profile_url = f"https://www.tiktok.com/@{username}"
-            response = self.session.get(profile_url, timeout=10)
+            response = self.session.get(profile_url, timeout=15)
             
             if response.status_code == 200:
                 content = response.text.lower()
-                # Look for live indicators in the page content
-                live_indicators = [
-                    '"is_live":true',
-                    'live_status":1',
-                    'user_live_status":1',
-                    'live_room',
-                    'liveroom'
+                
+                # Enhanced live detection patterns
+                live_patterns = [
+                    r'"is_live"\s*:\s*true',
+                    r'"live_status"\s*:\s*1',
+                    r'"user_live_status"\s*:\s*1',
+                    r'live.*room',
+                    r'liveroom',
+                    r'"room_id"',
+                    r'live.*stream',
+                    r'broadcasting.*live'
                 ]
                 
-                for indicator in live_indicators:
-                    if indicator in content:
-                        logger.info(f"Found live indicator for {username}: {indicator}")
+                for pattern in live_patterns:
+                    if re.search(pattern, content):
+                        logger.info(f"✅ Pattern match for {username}: {pattern}")
                         return True
+                
+                # Check for live room data structure
+                if '"liveRoom":' in content and '"liveRoomId":' in content:
+                    logger.info(f"✅ Live room structure found for {username}")
+                    return True
             
-            # Method 2: Try to get live stream URL with yt-dlp
+            # Method 3: Try to extract live stream URL
             try:
                 live_url = f"https://www.tiktok.com/@{username}/live"
                 ydl_opts = {
                     'quiet': True,
                     'no_warnings': True,
                     'extract_flat': False,
-                    'skip_download': True
+                    'skip_download': True,
+                    'no_check_certificate': True
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(live_url, download=False)
-                    if info and info.get('is_live'):
-                        logger.info(f"yt-dlp confirms {username} is live")
+                    if info and (info.get('is_live') or info.get('formats')):
+                        logger.info(f"✅ yt-dlp confirms {username} is live")
                         return True
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"yt-dlp check failed for {username}: {e}")
             
             return False
             
@@ -91,54 +120,58 @@ class TikTokChecker:
             return False
 
 class StreamRecorder:
-    """Record TikTok livestreams"""
+    """Enhanced stream recorder with better error handling"""
     
     def __init__(self):
         self.recordings_dir = "recordings"
         os.makedirs(self.recordings_dir, exist_ok=True)
     
     def record_stream(self, username):
-        """Record a TikTok livestream"""
+        """Record a TikTok livestream with enhanced options"""
         try:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             output_file = os.path.join(self.recordings_dir, f"{username}_{timestamp}.mp4")
             
             live_url = f"https://www.tiktok.com/@{username}/live"
             
-            # Use yt-dlp to get stream URL and record with ffmpeg
+            # Enhanced yt-dlp options for better compatibility
             ydl_opts = {
-                'quiet': True,
+                'format': 'best[height<=480]/best',
+                'outtmpl': output_file,
                 'no_warnings': True,
-                'format': 'best[height<=480]',
+                'extractaudio': False,
+                'audioformat': "mp3",
+                'embed_subs': False,
+                'writesubtitles': False,
+                'writeautomaticsub': False,
+                'ignoreerrors': True,
+                'no_check_certificate': True,
+                'prefer_ffmpeg': True,
+                'hls_prefer_native': True,
+                'live_from_start': True,
+                'wait_for_video': (1, 30)
             }
             
+            logger.info(f"🎬 Starting recording for {username}")
+            
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(live_url, download=False)
-                if info and 'url' in info:
-                    stream_url = info['url']
+                try:
+                    ydl.download([live_url])
                     
-                    # Record with ffmpeg
-                    cmd = [
-                        'ffmpeg',
-                        '-i', stream_url,
-                        '-c', 'copy',
-                        '-t', '3600',  # Max 1 hour
-                        '-y',  # Overwrite output files
-                        output_file
-                    ]
-                    
-                    logger.info(f"Starting recording for {username}")
-                    process = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-                    
-                    if process.returncode == 0 and os.path.exists(output_file):
-                        logger.info(f"Recording completed: {output_file}")
+                    # Check if file was created successfully
+                    if os.path.exists(output_file) and os.path.getsize(output_file) > 1024:  # At least 1KB
+                        logger.info(f"✅ Recording completed: {output_file}")
                         return output_file
                     else:
-                        logger.error(f"Recording failed for {username}: {process.stderr}")
+                        logger.error(f"❌ Recording file empty or not created for {username}")
                         return None
                         
+                except Exception as e:
+                    logger.error(f"❌ yt-dlp recording failed for {username}: {e}")
+                    return None
+                    
         except Exception as e:
-            logger.error(f"Recording error for {username}: {e}")
+            logger.error(f"❌ Recording error for {username}: {e}")
             return None
 
 class GoogleDriveUploader:
@@ -176,7 +209,7 @@ class GoogleDriveUploader:
                 fields='id,webViewLink'
             ).execute()
             
-            logger.info(f"Uploaded {filename} to Google Drive")
+            logger.info(f"📁 Uploaded {filename} to Google Drive")
             return file.get('webViewLink')
             
         except Exception as e:
@@ -217,7 +250,7 @@ def load_usernames():
     try:
         if os.path.exists('usernames.txt'):
             with open('usernames.txt', 'r') as f:
-                usernames = [line.strip().replace('@', '') for line in f if line.strip()]
+                usernames = [line.strip().replace('@', '') for line in f if line.strip() and not line.strip().startswith('#')]
                 return [u for u in usernames if u]
         return []
     except Exception as e:
@@ -237,19 +270,18 @@ def load_google_credentials():
     try:
         if os.path.exists('credentials.json'):
             with open('credentials.json', 'r') as f:
-                creds_info = json.load(f)
-                return creds_info
+                return json.load(f)
         else:
-            logger.error("credentials.json not found!")
+            logger.error("❌ credentials.json not found!")
             return None
     except Exception as e:
-        logger.error(f"Error loading credentials: {e}")
+        logger.error(f"❌ Error loading credentials: {e}")
         return None
 
 def record_user_stream(username, checker, recorder, uploader):
     """Record a user's livestream in separate thread"""
     try:
-        logger.info(f"Recording thread started for {username}")
+        logger.info(f"🎬 Recording thread started for {username}")
         update_status(username, is_recording=True, recording_start=datetime.now().isoformat())
         
         # Record the stream
@@ -257,7 +289,7 @@ def record_user_stream(username, checker, recorder, uploader):
         
         if output_file and os.path.exists(output_file):
             file_size = os.path.getsize(output_file)
-            logger.info(f"Recording completed for {username}: {file_size} bytes")
+            logger.info(f"✅ Recording completed for {username}: {file_size} bytes")
             
             update_status(username, 
                          last_recording=output_file,
@@ -272,18 +304,18 @@ def record_user_stream(username, checker, recorder, uploader):
                         update_status(username, drive_link=drive_url)
                         # Remove local file after successful upload
                         os.remove(output_file)
-                        logger.info(f"Uploaded and cleaned up: {username}")
+                        logger.info(f"📁 Uploaded and cleaned up: {username}")
                     else:
-                        logger.error(f"Drive upload failed for {username}")
+                        logger.error(f"❌ Drive upload failed for {username}")
                 except Exception as e:
-                    logger.error(f"Drive upload error for {username}: {e}")
+                    logger.error(f"❌ Drive upload error for {username}: {e}")
         else:
-            logger.error(f"Recording failed for {username}")
+            logger.error(f"❌ Recording failed for {username}")
         
         update_status(username, is_recording=False)
         
     except Exception as e:
-        logger.error(f"Recording thread error for {username}: {e}")
+        logger.error(f"❌ Recording thread error for {username}: {e}")
         update_status(username, is_recording=False, error=str(e))
     finally:
         # Clean up thread reference
@@ -291,10 +323,10 @@ def record_user_stream(username, checker, recorder, uploader):
             del recording_threads[username]
 
 def monitoring_loop():
-    """Main monitoring loop"""
+    """Main monitoring loop with enhanced live detection"""
     global monitoring_active, drive_service
     
-    logger.info("Starting monitoring loop")
+    logger.info("🚀 Starting monitoring loop")
     monitoring_active = True
     
     # Initialize components
@@ -302,15 +334,18 @@ def monitoring_loop():
     recorder = StreamRecorder()
     uploader = GoogleDriveUploader(drive_service) if drive_service else None
     
+    check_interval = 30  # seconds between full cycles
+    user_check_interval = 3  # seconds between users
+    
     while monitoring_active:
         try:
             usernames = load_usernames()
             if not usernames:
-                logger.info("No usernames to monitor")
+                logger.info("⚠️ No usernames to monitor")
                 time.sleep(60)
                 continue
             
-            logger.info(f"Checking {len(usernames)} users...")
+            logger.info(f"🔍 Checking {len(usernames)} users...")
             
             for username in usernames:
                 if not monitoring_active:
@@ -320,9 +355,10 @@ def monitoring_loop():
                     # Check if user is live
                     is_live = checker.is_live(username)
                     
+                    current_time = datetime.now().isoformat()
                     update_status(username, 
                                  is_live=is_live,
-                                 last_check=datetime.now().isoformat())
+                                 last_check=current_time)
                     
                     if is_live:
                         logger.info(f"🔴 {username} is LIVE!")
@@ -336,29 +372,37 @@ def monitoring_loop():
                             )
                             thread.start()
                             recording_threads[username] = thread
-                            logger.info(f"Started recording {username}")
+                            logger.info(f"🎬 Started recording {username}")
+                        else:
+                            logger.info(f"📹 Already recording {username}")
                     else:
                         logger.debug(f"⚪ {username} is offline")
                     
                 except Exception as e:
-                    logger.error(f"Error checking {username}: {e}")
+                    logger.error(f"❌ Error checking {username}: {e}")
                     update_status(username, error=str(e))
                 
-                time.sleep(5)  # Delay between users
+                # Small delay between user checks
+                time.sleep(user_check_interval)
             
-            time.sleep(30)  # Wait before next cycle
+            # Wait before next cycle
+            logger.info(f"⏱️ Waiting {check_interval}s before next cycle...")
+            time.sleep(check_interval)
             
         except Exception as e:
-            logger.error(f"Error in monitoring loop: {e}")
+            logger.error(f"❌ Error in monitoring loop: {e}")
             time.sleep(60)
     
-    logger.info("Monitoring loop stopped")
+    logger.info("🛑 Monitoring loop stopped")
 
 # Routes
 @app.route('/')
 def home():
-    """Home page - redirect to status"""
-    return redirect(url_for('status'))
+    """Home page - redirect to authorization or status"""
+    if drive_service:
+        return redirect(url_for('status'))
+    else:
+        return redirect(url_for('authorize'))
 
 @app.route('/status')
 def status():
@@ -373,9 +417,9 @@ def status():
         
         # Format timestamps
         for field in ['last_updated', 'last_check', 'recording_start', 'recording_end']:
-            if field in data:
+            if field in data and data[field]:
                 try:
-                    dt = datetime.fromisoformat(data[field])
+                    dt = datetime.fromisoformat(data[field].replace('Z', '+00:00'))
                     data[f'{field}_formatted'] = dt.strftime('%Y-%m-%d %H:%M:%S')
                 except:
                     pass
@@ -414,12 +458,15 @@ def auth_google():
     try:
         creds_info = load_google_credentials()
         if not creds_info:
-            return "Google credentials not found. Please add credentials.json file.", 500
+            return "❌ Google credentials not found. Please add credentials.json file.", 500
+        
+        # Get the redirect URI from environment or construct it
+        redirect_uri = request.url_root.rstrip('/') + '/auth/callback'
         
         flow = Flow.from_client_config(
             creds_info,
             scopes=['https://www.googleapis.com/auth/drive.file'],
-            redirect_uri=request.url_root.rstrip('/') + '/auth/callback'
+            redirect_uri=redirect_uri
         )
         
         authorization_url, state = flow.authorization_url(
@@ -428,23 +475,26 @@ def auth_google():
         )
         
         session['state'] = state
+        session['redirect_uri'] = redirect_uri
         return redirect(authorization_url)
         
     except Exception as e:
-        logger.error(f"OAuth initiation error: {e}")
+        logger.error(f"❌ OAuth initiation error: {e}")
         return f"Authorization setup failed: {e}", 500
 
 @app.route('/auth/callback')
 def auth_callback():
-    """Handle OAuth callback"""
+    """Handle OAuth callback and auto-start monitoring"""
     global drive_service, monitoring_thread
     
     try:
         creds_info = load_google_credentials()
+        redirect_uri = session.get('redirect_uri', request.url_root.rstrip('/') + '/auth/callback')
+        
         flow = Flow.from_client_config(
             creds_info,
             scopes=['https://www.googleapis.com/auth/drive.file'],
-            redirect_uri=request.url_root.rstrip('/') + '/auth/callback'
+            redirect_uri=redirect_uri
         )
         
         flow.fetch_token(authorization_response=request.url)
@@ -454,19 +504,20 @@ def auth_callback():
         drive_service = build('drive', 'v3', credentials=credentials)
         
         # Test the connection
-        drive_service.about().get(fields="user").execute()
-        logger.info("Google Drive connected successfully!")
+        about = drive_service.about().get(fields="user").execute()
+        user_email = about.get('user', {}).get('emailAddress', 'Unknown')
+        logger.info(f"✅ Google Drive connected successfully for {user_email}")
         
         # Auto-start monitoring after successful authorization
-        if not monitoring_active:
+        if not monitoring_active and monitoring_thread is None:
             monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
             monitoring_thread.start()
-            logger.info("Auto-started monitoring after authorization")
+            logger.info("🚀 Auto-started monitoring after authorization")
         
         return redirect(url_for('status'))
         
     except Exception as e:
-        logger.error(f"OAuth callback error: {e}")
+        logger.error(f"❌ OAuth callback error: {e}")
         return f"Authorization failed: {e}", 500
 
 @app.route('/authorize')
@@ -482,17 +533,18 @@ def start_monitoring():
     if not monitoring_active:
         monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
         monitoring_thread.start()
-        logger.info("Monitoring started manually")
-    
-    return jsonify({'success': True, 'monitoring_active': True})
+        logger.info("🚀 Monitoring started manually")
+        return jsonify({'success': True, 'message': 'Monitoring started'})
+    else:
+        return jsonify({'success': True, 'message': 'Monitoring already active'})
 
 @app.route('/stop_monitoring', methods=['POST'])
 def stop_monitoring():
     """Stop monitoring"""
     global monitoring_active
     monitoring_active = False
-    logger.info("Monitoring stopped")
-    return jsonify({'success': True, 'monitoring_active': False})
+    logger.info("🛑 Monitoring stopped")
+    return jsonify({'success': True, 'message': 'Monitoring stopped'})
 
 @app.route('/add_user', methods=['POST'])
 def add_user():
@@ -506,29 +558,39 @@ def add_user():
         if username not in usernames:
             with open('usernames.txt', 'a') as f:
                 f.write(f'\n{username}')
-            logger.info(f"Added user: {username}")
+            logger.info(f"➕ Added user: {username}")
+        else:
+            logger.info(f"ℹ️ User {username} already exists")
         
         return redirect(url_for('status'))
     except Exception as e:
-        logger.error(f"Error adding user: {e}")
+        logger.error(f"❌ Error adding user: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health')
 def health():
-    """Health check endpoint"""
+    """Health check endpoint for Render"""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'monitoring_active': monitoring_active,
-        'active_recordings': len(recording_threads)
+        'active_recordings': len(recording_threads),
+        'drive_connected': bool(drive_service),
+        'usernames_count': len(load_usernames())
     })
 
 if __name__ == '__main__':
     # Get port from environment variable (required for Render)
     port = int(os.environ.get('PORT', 5000))
     
-    logger.info(f"Starting TikTok Livestream Recorder on port {port}")
-    logger.info(f"Monitoring {len(load_usernames())} users")
+    logger.info("🚀 Starting TikTok Livestream Recorder")
+    logger.info(f"🌐 Running on port {port}")
+    
+    usernames = load_usernames()
+    logger.info(f"👥 Monitoring {len(usernames)} users: {', '.join(usernames) if usernames else 'None'}")
+    
+    if not os.path.exists('credentials.json'):
+        logger.warning("⚠️ credentials.json not found - Google Drive features will be disabled")
     
     # Run Flask app
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
