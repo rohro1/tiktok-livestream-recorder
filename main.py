@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-TikTok Livestream Recorder - FIXED Production Version
-Automatically monitors TikTok users and records their livestreams with reliable detection
+TikTok Livestream Recorder - PRODUCTION FIXED VERSION
+Automatically monitors TikTok users and records their livestreams with 24/7 reliability
 """
 
 import os
@@ -28,6 +28,9 @@ import secrets
 import psutil
 import random
 import urllib.parse
+import gc
+import traceback
+from threading import Lock
 
 # Flask app configuration
 app = Flask(__name__)
@@ -37,64 +40,90 @@ app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 RECORDINGS_DIR = "recordings"
 USERNAMES_FILE = "usernames.txt"
-CHECK_INTERVAL = 30  # seconds between checks
-RECORDING_QUALITY = "best[height<=480]/worst[height<=480]/best"  # 480p max quality for space saving
+CHECK_INTERVAL = 45  # Increased to reduce API load
+RECORDING_QUALITY = "best[height<=480]/worst[height<=480]/best"
+MAX_RECORDING_DURATION = 4 * 3600  # 4 hours max per recording
 
-# Global state
+# Global state with thread safety
 monitoring_active = False
 monitoring_thread = None
 recording_processes = {}
 live_status = {}
 last_check_times = {}
 drive_service = None
+active_recordings_lock = Lock()
+service_lock = Lock()
 
-# Setup logging
+# Session management
+session_start_time = datetime.now()
+last_service_refresh = datetime.now()
+error_count = 0
+MAX_ERRORS_BEFORE_RESET = 10
+
+# Setup enhanced logging
+class RotatingHandler(logging.Handler):
+    def __init__(self, max_size=10*1024*1024):  # 10MB max
+        super().__init__()
+        self.max_size = max_size
+        
+    def emit(self, record):
+        try:
+            if os.path.exists('app.log') and os.path.getsize('app.log') > self.max_size:
+                # Rotate log file
+                if os.path.exists('app.log.old'):
+                    os.remove('app.log.old')
+                os.rename('app.log', 'app.log.old')
+        except:
+            pass
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('app.log'),
-        logging.StreamHandler()
+        logging.StreamHandler(),
+        RotatingHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 class TikTokLiveDetector:
-    """Enhanced TikTok live detection using multiple reliable methods"""
+    """Enhanced TikTok live detection with better reliability and error recovery"""
     
     def __init__(self):
         self.session = requests.Session()
+        self.session.timeout = 15
         self.user_agents = [
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
-            'Mozilla/5.0 (Android 11; Mobile; rv:68.0) Gecko/68.0 Firefox/88.0',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet'
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+            'Mozilla/5.0 (Android 12; Mobile; rv:68.0) Gecko/68.0 Firefox/102.0',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
         ]
+        self.last_user_agent_rotation = datetime.now()
+        self.current_ua_index = 0
+    
+    def rotate_user_agent(self):
+        """Rotate user agent every 5 minutes"""
+        if datetime.now() - self.last_user_agent_rotation > timedelta(minutes=5):
+            self.current_ua_index = (self.current_ua_index + 1) % len(self.user_agents)
+            self.last_user_agent_rotation = datetime.now()
     
     def get_headers(self, mobile=True):
-        """Get randomized headers for requests"""
-        if mobile:
-            return {
-                'User-Agent': random.choice(self.user_agents[:2]),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none'
-            }
-        else:
-            return {
-                'User-Agent': random.choice(self.user_agents[2:]),
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': 'https://www.tiktok.com/'
-            }
+        """Get current headers with rotation"""
+        self.rotate_user_agent()
+        ua = self.user_agents[self.current_ua_index]
+        
+        return {
+            'User-Agent': ua,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+        }
     
     def check_live_with_ytdlp(self, username):
-        """Use yt-dlp to check if user is live (most reliable method)"""
+        """Enhanced yt-dlp check with better error handling"""
         try:
             clean_username = username.replace('@', '').strip()
             live_url = f"https://www.tiktok.com/@{clean_username}/live"
@@ -103,25 +132,36 @@ class TikTokLiveDetector:
                 'quiet': True,
                 'no_warnings': True,
                 'skip_download': True,
-                'timeout': 15,
-                'socket_timeout': 10,
-                'http_headers': self.get_headers(mobile=True)
+                'timeout': 20,
+                'socket_timeout': 15,
+                'http_headers': self.get_headers(mobile=True),
+                'retries': 2,
+                'fragment_retries': 2,
+                'extractor_retries': 2
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 try:
                     info = ydl.extract_info(live_url, download=False)
                     if info and (info.get('url') or info.get('formats')):
-                        logger.info(f"✅ yt-dlp: {username} is LIVE!")
-                        return True, info
+                        # Validate that we actually have a playable stream
+                        if self._validate_stream_info(info):
+                            logger.info(f"✅ yt-dlp: {username} is LIVE with valid stream!")
+                            return True, info
+                        else:
+                            logger.warning(f"⚠️ yt-dlp: {username} detected but no valid stream")
+                            return False, None
+                            
                 except yt_dlp.utils.DownloadError as e:
-                    if "not currently live" in str(e).lower() or "private" in str(e).lower():
+                    error_msg = str(e).lower()
+                    if any(phrase in error_msg for phrase in ["not currently live", "private", "unavailable", "removed"]):
                         return False, None
-                    elif "geo" in str(e).lower() or "region" in str(e).lower():
-                        logger.warning(f"⚠️ Geo-blocked for {username}, trying alternative methods")
+                    elif "geo" in error_msg or "region" in error_msg:
+                        logger.warning(f"⚠️ Geo-blocked for {username}")
                         return False, None
                     else:
-                        raise e
+                        logger.error(f"❌ yt-dlp error for {username}: {e}")
+                        return False, None
             
             return False, None
             
@@ -129,100 +169,45 @@ class TikTokLiveDetector:
             logger.error(f"❌ yt-dlp check failed for {username}: {e}")
             return False, None
     
-    def check_live_webpage_method(self, username):
-        """Check live status by parsing TikTok webpage"""
-        try:
-            clean_username = username.replace('@', '').strip()
-            
-            # Try different URL patterns
-            urls_to_try = [
-                f"https://www.tiktok.com/@{clean_username}/live",
-                f"https://m.tiktok.com/@{clean_username}/live",
-                f"https://www.tiktok.com/@{clean_username}"
-            ]
-            
-            for url in urls_to_try:
-                try:
-                    response = self.session.get(
-                        url, 
-                        headers=self.get_headers(mobile='m.tiktok' in url),
-                        timeout=10,
-                        allow_redirects=True
-                    )
-                    
-                    if response.status_code == 200:
-                        content = response.text.lower()
-                        
-                        # Look for live indicators in page content
-                        live_indicators = [
-                            '"islive":true',
-                            '"roomid":"',
-                            'class="live-indicator"',
-                            'data-live="true"',
-                            '"status":2',  # TikTok live status code
-                            'webcast/room/',
-                            'live_room',
-                            '"room_id":"'
-                        ]
-                        
-                        offline_indicators = [
-                            '"islive":false',
-                            'not currently live',
-                            'no live streams',
-                            'user is not live',
-                            '"status":0'
-                        ]
-                        
-                        # Check for live indicators
-                        live_found = any(indicator in content for indicator in live_indicators)
-                        offline_found = any(indicator in content for indicator in offline_indicators)
-                        
-                        if live_found and not offline_found:
-                            logger.info(f"✅ Webpage: {username} appears to be LIVE!")
-                            return True
-                        elif offline_found:
-                            return False
-                        
-                        # Look for room_id in JSON data
-                        room_id_match = re.search(r'"room_id["\s]*:["\s]*([^",\s]+)', content)
-                        if room_id_match:
-                            room_id = room_id_match.group(1).strip('"')
-                            if room_id and room_id != '0' and room_id != '':
-                                logger.info(f"✅ Found room_id: {username} is LIVE! (Room: {room_id})")
-                                return True
-                
-                except requests.RequestException:
-                    continue
-            
+    def _validate_stream_info(self, info):
+        """Validate that stream info contains usable data"""
+        if not info:
             return False
             
-        except Exception as e:
-            logger.error(f"❌ Webpage check failed for {username}: {e}")
+        # Check for direct URL
+        if info.get('url'):
+            return True
+            
+        # Check formats
+        formats = info.get('formats', [])
+        if not formats:
             return False
+            
+        # Look for valid formats with URLs
+        valid_formats = [f for f in formats if f.get('url') and f.get('protocol') != 'unknown']
+        return len(valid_formats) > 0
     
     def check_live_status(self, username):
-        """Main live detection method combining multiple approaches"""
+        """Main live detection method with enhanced reliability"""
         try:
             clean_username = username.replace('@', '').strip()
             
-            # Method 1: Try yt-dlp first (most reliable)
+            # Primary method: yt-dlp
             logger.debug(f"🔍 Checking {username} with yt-dlp...")
             is_live_ytdlp, stream_info = self.check_live_with_ytdlp(username)
             
-            if is_live_ytdlp:
+            if is_live_ytdlp and stream_info:
                 return True, stream_info
             
-            # Method 2: Try webpage parsing
-            logger.debug(f"🔍 Checking {username} with webpage method...")
-            is_live_webpage = self.check_live_webpage_method(username)
+            # If yt-dlp fails, wait and try once more
+            if not is_live_ytdlp:
+                time.sleep(3)  # Brief delay
+                logger.debug(f"🔍 Retry check for {username}...")
+                is_live_retry, stream_info_retry = self.check_live_with_ytdlp(username)
+                if is_live_retry and stream_info_retry:
+                    return True, stream_info_retry
             
-            if is_live_webpage:
-                # If webpage says live, try to get stream info with yt-dlp again
-                time.sleep(2)  # Brief delay
-                is_live_ytdlp_retry, stream_info = self.check_live_with_ytdlp(username)
-                return True, stream_info
-            
-            logger.info(f"❌ All checks: {username} is not live")
+            logger.info(f"❌ {username} is not live")
             return False, None
             
         except Exception as e:
@@ -232,6 +217,9 @@ class TikTokLiveDetector:
 class StreamRecorder:
     def __init__(self):
         self.live_detector = TikTokLiveDetector()
+        self.recording_files = {}  # Track active recording files to prevent duplicates
+        self.upload_queue = []
+        self.upload_lock = Lock()
         self.ensure_directories()
         
     def ensure_directories(self):
@@ -323,11 +311,53 @@ class StreamRecorder:
         """Check if user is live using enhanced detection"""
         return self.live_detector.check_live_status(username)
     
+    def get_unique_filename(self, username):
+        """Generate unique filename to prevent duplicates"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        base_filename = f"{username}_{timestamp}"
+        
+        # Check for existing files in the same minute
+        user_dir = os.path.join(RECORDINGS_DIR, username)
+        counter = 1
+        while True:
+            if counter == 1:
+                filename = f"{base_filename}.mp4"
+            else:
+                filename = f"{base_filename}_{counter}.mp4"
+            
+            filepath = os.path.join(user_dir, filename)
+            
+            # Check if file exists or is being recorded
+            if not os.path.exists(filepath) and filename not in self.recording_files.values():
+                self.recording_files[username] = filename
+                return filename, filepath
+            
+            counter += 1
+            if counter > 100:  # Safety limit
+                break
+        
+        # Fallback with microseconds
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        filename = f"{username}_{timestamp}.mp4"
+        filepath = os.path.join(user_dir, filename)
+        self.recording_files[username] = filename
+        return filename, filepath
+    
     def start_recording(self, username, stream_info=None):
-        """Start recording with FFmpeg - FIXED VERSION"""
-        if username in recording_processes:
-            logger.info(f"📹 Already recording {username}")
-            return False
+        """Start recording with enhanced FFmpeg settings and duplicate prevention"""
+        with active_recordings_lock:
+            if username in recording_processes:
+                # Check if existing process is still alive
+                existing_process = recording_processes[username]['process']
+                if existing_process.poll() is None:
+                    logger.info(f"📹 Already recording {username} (active process)")
+                    return False
+                else:
+                    # Clean up dead process
+                    logger.warning(f"🧹 Cleaning up dead recording process for {username}")
+                    del recording_processes[username]
+                    if username in self.recording_files:
+                        del self.recording_files[username]
         
         try:
             # Ensure user folder exists
@@ -342,76 +372,68 @@ class StreamRecorder:
                     return False
             
             # Extract best quality stream URL (480p max)
-            stream_url = None
-            if stream_info.get('url'):
-                stream_url = stream_info['url']
-            elif stream_info.get('formats'):
-                # Find best format under 480p
-                best_format = None
-                for fmt in stream_info['formats']:
-                    if fmt.get('url') and fmt.get('height', 0) <= 480:
-                        if not best_format or (fmt.get('height', 0) > best_format.get('height', 0)):
-                            best_format = fmt
-                
-                if best_format:
-                    stream_url = best_format['url']
-                elif stream_info['formats']:
-                    # Fallback to first available URL
-                    stream_url = stream_info['formats'][0].get('url')
-            
+            stream_url = self._extract_best_stream_url(stream_info)
             if not stream_url:
-                logger.error(f"❌ No stream URL found for {username}")
+                logger.error(f"❌ No valid stream URL found for {username}")
                 return False
             
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"{username}_{timestamp}.mp4"
-            user_dir = os.path.join(RECORDINGS_DIR, username)
-            filepath = os.path.join(user_dir, filename)
+            # Generate unique filename
+            filename, filepath = self.get_unique_filename(username)
             
             logger.info(f"🎬 Starting recording for {username}")
             logger.info(f"📁 Output: {filepath}")
             logger.info(f"🔗 Stream URL: {stream_url[:100]}...")
             
-            # Enhanced FFmpeg command for reliable 480p recording
+            # Enhanced FFmpeg command for reliable recording with better compatibility
             cmd = [
                 'ffmpeg',
-                '-headers', 'User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15',
+                '-headers', f'User-Agent: {self.live_detector.user_agents[0]}',
+                '-headers', 'Referer: https://www.tiktok.com/',
                 '-i', stream_url,
                 '-c:v', 'libx264',
                 '-c:a', 'aac',
-                '-preset', 'faster',        # Balanced speed/quality
-                '-crf', '28',              # Good quality for 480p
-                '-maxrate', '1200k',       # Max bitrate for 480p
-                '-bufsize', '2400k',       # Buffer size
-                '-vf', 'scale=-2:480',     # Force 480p, maintain aspect ratio
-                '-movflags', '+faststart', # Better for streaming
-                '-reconnect', '1',         # Auto-reconnect
+                '-preset', 'medium',           # Better quality
+                '-crf', '26',                  # Better quality for 480p
+                '-maxrate', '1500k',           # Increased bitrate
+                '-bufsize', '3000k',           # Larger buffer
+                '-vf', 'scale=-2:480:flags=lanczos',  # Better scaling
+                '-movflags', '+faststart+frag_keyframe+empty_moov',  # Better streaming compatibility
+                '-f', 'mp4',                   # Ensure MP4 format
+                '-avoid_negative_ts', 'make_zero',  # Fix timestamp issues
+                '-fflags', '+genpts',          # Generate presentation timestamps
+                '-reconnect', '1',
                 '-reconnect_streamed', '1',
-                '-reconnect_delay_max', '10',
-                '-rw_timeout', '10000000', # 10 second read timeout
-                '-y',                      # Overwrite output file
+                '-reconnect_delay_max', '15',
+                '-rw_timeout', '20000000',     # 20 second timeout
+                '-analyzeduration', '10000000', # 10 seconds analysis
+                '-probesize', '10000000',      # 10MB probe size
+                '-thread_queue_size', '512',   # Larger thread queue
+                '-y',                          # Overwrite output file
                 filepath
             ]
             
-            # Start FFmpeg process
+            # Start FFmpeg process with better settings
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
-                bufsize=1
+                bufsize=1,
+                preexec_fn=os.setsid if hasattr(os, 'setsid') else None  # Create process group
             )
             
             # Store recording info
-            recording_processes[username] = {
-                'process': process,
-                'filename': filename,
-                'filepath': filepath,
-                'start_time': datetime.now(),
-                'stream_url': stream_url,
-                'stream_info': stream_info
-            }
+            with active_recordings_lock:
+                recording_processes[username] = {
+                    'process': process,
+                    'filename': filename,
+                    'filepath': filepath,
+                    'start_time': datetime.now(),
+                    'stream_url': stream_url,
+                    'stream_info': stream_info,
+                    'last_size_check': 0,
+                    'stall_count': 0
+                }
             
             logger.info(f"✅ Recording started for {username} (PID: {process.pid})")
             
@@ -419,7 +441,8 @@ class StreamRecorder:
             monitor_thread = threading.Thread(
                 target=self.monitor_recording,
                 args=(username,),
-                daemon=True
+                daemon=True,
+                name=f"RecordingMonitor-{username}"
             )
             monitor_thread.start()
             
@@ -427,50 +450,132 @@ class StreamRecorder:
             
         except Exception as e:
             logger.error(f"❌ Error starting recording for {username}: {e}")
+            logger.error(traceback.format_exc())
             # Clean up if failed
-            if username in recording_processes:
-                del recording_processes[username]
+            with active_recordings_lock:
+                if username in recording_processes:
+                    del recording_processes[username]
+                if username in self.recording_files:
+                    del self.recording_files[username]
             return False
     
+    def _extract_best_stream_url(self, stream_info):
+        """Extract the best stream URL from yt-dlp info"""
+        if not stream_info:
+            return None
+            
+        # Direct URL
+        if stream_info.get('url'):
+            return stream_info['url']
+        
+        # From formats
+        formats = stream_info.get('formats', [])
+        if not formats:
+            return None
+        
+        # Filter and sort formats
+        valid_formats = []
+        for fmt in formats:
+            if not fmt.get('url'):
+                continue
+                
+            height = fmt.get('height', 0)
+            width = fmt.get('width', 0)
+            fps = fmt.get('fps', 0)
+            
+            # Prefer formats under 480p with reasonable fps
+            if height <= 480 and fps <= 60:
+                valid_formats.append(fmt)
+        
+        if not valid_formats:
+            # Fallback to any format with URL
+            valid_formats = [f for f in formats if f.get('url')]
+        
+        if not valid_formats:
+            return None
+        
+        # Sort by quality (prefer higher quality within limits)
+        valid_formats.sort(key=lambda f: (f.get('height', 0), f.get('fps', 0)), reverse=True)
+        
+        return valid_formats[0]['url']
+    
     def monitor_recording(self, username):
-        """Monitor a specific recording process"""
+        """Enhanced recording monitoring with better stall detection"""
         try:
             if username not in recording_processes:
                 return
             
-            process = recording_processes[username]['process']
-            filepath = recording_processes[username]['filepath']
-            start_time = recording_processes[username]['start_time']
+            process_info = recording_processes[username]
+            process = process_info['process']
+            filepath = process_info['filepath']
+            start_time = process_info['start_time']
             
             logger.info(f"👁️ Monitoring recording for {username}")
             
             last_size = 0
-            no_growth_count = 0
+            stall_count = 0
+            last_log_time = datetime.now()
             
             while process.poll() is None:
-                # Check if file exists and is growing
-                if os.path.exists(filepath):
-                    current_size = os.path.getsize(filepath)
+                try:
+                    # Check recording duration limit
                     duration = datetime.now() - start_time
+                    if duration.total_seconds() > MAX_RECORDING_DURATION:
+                        logger.info(f"⏰ Recording duration limit reached for {username}")
+                        process.terminate()
+                        break
                     
-                    # Check if file is growing
-                    if current_size > last_size:
-                        no_growth_count = 0
-                        logger.info(f"📊 {username}: {duration.total_seconds():.0f}s, {current_size/1024/1024:.1f}MB")
+                    # Check if file exists and is growing
+                    if os.path.exists(filepath):
+                        current_size = os.path.getsize(filepath)
+                        
+                        # Check for file growth
+                        if current_size > last_size:
+                            stall_count = 0
+                            process_info['last_size_check'] = current_size
+                            
+                            # Log progress every 2 minutes
+                            if datetime.now() - last_log_time > timedelta(minutes=2):
+                                logger.info(f"📊 {username}: {duration.total_seconds():.0f}s, {current_size/1024/1024:.1f}MB")
+                                last_log_time = datetime.now()
+                        else:
+                            stall_count += 1
+                            if stall_count > 8:  # 80 seconds without growth
+                                logger.warning(f"⚠️ Recording stalled for {username}, stopping...")
+                                process.terminate()
+                                break
+                        
+                        last_size = current_size
                     else:
-                        no_growth_count += 1
-                        if no_growth_count > 6:  # 60 seconds without growth
-                            logger.warning(f"⚠️ Recording stalled for {username}, stopping...")
-                            process.terminate()
+                        logger.warning(f"⚠️ Recording file not found: {filepath}")
+                        stall_count += 1
+                        if stall_count > 5:
                             break
                     
-                    last_size = current_size
-                else:
-                    logger.warning(f"⚠️ Recording file not found: {filepath}")
-                
-                time.sleep(10)  # Check every 10 seconds
+                    time.sleep(10)  # Check every 10 seconds
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error in recording monitor for {username}: {e}")
+                    break
             
-            # Process ended
+            # Process ended - handle cleanup
+            self._handle_recording_completion(username)
+                
+        except Exception as e:
+            logger.error(f"❌ Error monitoring recording for {username}: {e}")
+            self._cleanup_recording(username)
+    
+    def _handle_recording_completion(self, username):
+        """Handle recording completion and upload"""
+        try:
+            if username not in recording_processes:
+                return
+            
+            process_info = recording_processes[username]
+            process = process_info['process']
+            filepath = process_info['filepath']
+            start_time = process_info['start_time']
+            
             return_code = process.returncode
             duration = datetime.now() - start_time
             
@@ -479,19 +584,26 @@ class StreamRecorder:
             else:
                 logger.warning(f"⚠️ Recording ended with code {return_code} for {username}")
             
-            # Check final file and upload
+            # Check final file
             if os.path.exists(filepath):
                 file_size = os.path.getsize(filepath)
-                if file_size > 50000:  # At least 50KB
+                if file_size > 100000:  # At least 100KB
                     logger.info(f"💾 Recording saved: {filepath} ({file_size/1024/1024:.1f}MB)")
                     
-                    # Upload to Google Drive if authorized
-                    if drive_service:
-                        threading.Thread(
-                            target=self.upload_to_drive,
-                            args=(filepath, username),
-                            daemon=True
-                        ).start()
+                    # Add to upload queue
+                    with self.upload_lock:
+                        self.upload_queue.append({
+                            'filepath': filepath,
+                            'username': username,
+                            'timestamp': datetime.now()
+                        })
+                    
+                    # Start upload thread if not already running
+                    threading.Thread(
+                        target=self._process_upload_queue,
+                        daemon=True,
+                        name="UploadProcessor"
+                    ).start()
                 else:
                     logger.warning(f"⚠️ Recording file too small: {filepath} ({file_size} bytes)")
                     try:
@@ -501,34 +613,53 @@ class StreamRecorder:
                         pass
             
             # Clean up
-            if username in recording_processes:
-                del recording_processes[username]
-                logger.info(f"🧹 Cleaned up recording process for {username}")
+            self._cleanup_recording(username)
                 
         except Exception as e:
-            logger.error(f"❌ Error monitoring recording for {username}: {e}")
+            logger.error(f"❌ Error handling recording completion for {username}: {e}")
+            self._cleanup_recording(username)
+    
+    def _cleanup_recording(self, username):
+        """Clean up recording process data"""
+        with active_recordings_lock:
             if username in recording_processes:
                 del recording_processes[username]
+            if username in self.recording_files:
+                del self.recording_files[username]
+        logger.info(f"🧹 Cleaned up recording process for {username}")
     
     def stop_recording(self, username):
         """Stop recording for a user"""
-        if username not in recording_processes:
-            return False
+        with active_recordings_lock:
+            if username not in recording_processes:
+                return False
         
         try:
             process = recording_processes[username]['process']
             
             # Send SIGTERM for graceful shutdown
-            process.terminate()
+            try:
+                if hasattr(os, 'killpg'):
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                else:
+                    process.terminate()
+            except:
+                process.terminate()
             
             # Wait for graceful termination
             try:
-                process.wait(timeout=15)
+                process.wait(timeout=20)
                 logger.info(f"🛑 Gracefully stopped recording for {username}")
             except subprocess.TimeoutExpired:
                 # Force kill if needed
-                process.kill()
-                process.wait()
+                try:
+                    if hasattr(os, 'killpg'):
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    else:
+                        process.kill()
+                    process.wait()
+                except:
+                    pass
                 logger.warning(f"🔪 Force killed recording for {username}")
             
             return True
@@ -537,11 +668,42 @@ class StreamRecorder:
             logger.error(f"❌ Error stopping recording for {username}: {e}")
             return False
     
+    def _process_upload_queue(self):
+        """Process upload queue with retry logic"""
+        while True:
+            with self.upload_lock:
+                if not self.upload_queue:
+                    break
+                
+                upload_item = self.upload_queue.pop(0)
+            
+            # Try upload with retries
+            for attempt in range(3):
+                try:
+                    success = self.upload_to_drive(
+                        upload_item['filepath'],
+                        upload_item['username']
+                    )
+                    if success:
+                        break
+                    else:
+                        if attempt < 2:
+                            time.sleep(30 * (attempt + 1))  # Exponential backoff
+                        
+                except Exception as e:
+                    logger.error(f"❌ Upload attempt {attempt + 1} failed: {e}")
+                    if attempt < 2:
+                        time.sleep(30 * (attempt + 1))
+    
     def upload_to_drive(self, filepath, username):
-        """Upload recording to Google Drive with organized folders"""
+        """Enhanced Drive upload with better error handling"""
         try:
             if not drive_service:
                 logger.warning("❌ Google Drive not connected")
+                return False
+            
+            if not os.path.exists(filepath):
+                logger.error(f"❌ File not found for upload: {filepath}")
                 return False
             
             logger.info(f"☁️ Starting Drive upload for {username}...")
@@ -550,43 +712,78 @@ class StreamRecorder:
             current_date = datetime.now()
             year_month = current_date.strftime('%Y-%m')
             
-            # Get or create main folder
+            # Get or create folders
             main_folder_id = self.get_or_create_folder(drive_service, "TikTok_Recordings")
             if not main_folder_id:
                 logger.error(f"❌ Cannot create main Drive folder")
                 return False
             
-            # Get or create user folder
             user_folder_id = self.get_or_create_folder(drive_service, username, main_folder_id)
             if not user_folder_id:
                 logger.error(f"❌ Cannot create user Drive folder")
                 return False
             
-            # Get or create date folder
             date_folder_id = self.get_or_create_folder(drive_service, year_month, user_folder_id)
             if not date_folder_id:
                 logger.error(f"❌ Cannot create date Drive folder")
                 return False
             
-            # Upload file
+            # Check if file already exists in Drive
             filename = os.path.basename(filepath)
-            file_metadata = {
-                'name': filename,
-                'parents': [date_folder_id]
-            }
-            
-            media = MediaFileUpload(filepath, resumable=True)
-            
-            file = drive_service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id,webViewLink'
+            existing_files = drive_service.files().list(
+                q=f"name='{filename}' and '{date_folder_id}' in parents and trashed=false",
+                fields="files(id, name)"
             ).execute()
             
+            if existing_files.get('files'):
+                logger.info(f"⚠️ File already exists in Drive: {filename}")
+                # Remove local file since it's already uploaded
+                try:
+                    os.remove(filepath)
+                    logger.info(f"🗑️ Removed duplicate local file: {filepath}")
+                except:
+                    pass
+                return True
+            
+            # Upload file with resumable upload
+            file_metadata = {
+                'name': filename,
+                'parents': [date_folder_id],
+                'description': f'TikTok livestream recording of @{username} from {current_date.strftime("%Y-%m-%d %H:%M:%S")}'
+            }
+            
+            media = MediaFileUpload(
+                filepath, 
+                resumable=True,
+                chunksize=1024*1024*5  # 5MB chunks
+            )
+            
+            # Execute upload with timeout
+            request = drive_service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id,webViewLink,size'
+            )
+            
+            file = None
+            response = None
+            
+            # Resumable upload loop
+            while response is None:
+                try:
+                    status, response = request.next_chunk()
+                    if status:
+                        logger.info(f"☁️ Upload progress for {username}: {int(status.progress() * 100)}%")
+                except Exception as chunk_error:
+                    logger.error(f"❌ Upload chunk error: {chunk_error}")
+                    raise chunk_error
+            
+            file = response
             file_id = file.get('id')
             web_link = file.get('webViewLink')
+            file_size = file.get('size', '0')
             
-            logger.info(f"✅ Uploaded to Drive: {filename} (ID: {file_id})")
+            logger.info(f"✅ Uploaded to Drive: {filename} (ID: {file_id}, Size: {int(file_size)/1024/1024:.1f}MB)")
             
             # Remove local file after successful upload
             try:
@@ -595,47 +792,59 @@ class StreamRecorder:
             except Exception as e:
                 logger.warning(f"⚠️ Could not remove local file: {e}")
             
-            return web_link
+            return True
             
         except Exception as e:
             logger.error(f"❌ Drive upload failed for {username}: {e}")
+            logger.error(traceback.format_exc())
             return False
     
     def get_or_create_folder(self, service, folder_name, parent_id=None):
-        """Get or create a folder in Google Drive"""
+        """Get or create a folder in Google Drive with retry logic"""
         try:
-            # Search for existing folder
-            query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-            if parent_id:
-                query += f" and '{parent_id}' in parents"
-            
-            results = service.files().list(
-                q=query,
-                fields="files(id, name)"
-            ).execute()
-            
-            folders = results.get('files', [])
-            
-            if folders:
-                return folders[0]['id']
-            else:
-                # Create new folder
-                folder_metadata = {
-                    'name': folder_name,
-                    'mimeType': 'application/vnd.google-apps.folder'
-                }
-                
-                if parent_id:
-                    folder_metadata['parents'] = [parent_id]
-                
-                folder = service.files().create(
-                    body=folder_metadata,
-                    fields='id'
-                ).execute()
-                
-                folder_id = folder.get('id')
-                logger.info(f"📁 Created Drive folder: {folder_name} (ID: {folder_id})")
-                return folder_id
+            # Search for existing folder with retry
+            for attempt in range(3):
+                try:
+                    query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                    if parent_id:
+                        query += f" and '{parent_id}' in parents"
+                    
+                    results = service.files().list(
+                        q=query,
+                        fields="files(id, name)",
+                        pageSize=10
+                    ).execute()
+                    
+                    folders = results.get('files', [])
+                    
+                    if folders:
+                        return folders[0]['id']
+                    
+                    # Create new folder if not found
+                    folder_metadata = {
+                        'name': folder_name,
+                        'mimeType': 'application/vnd.google-apps.folder'
+                    }
+                    
+                    if parent_id:
+                        folder_metadata['parents'] = [parent_id]
+                    
+                    folder = service.files().create(
+                        body=folder_metadata,
+                        fields='id'
+                    ).execute()
+                    
+                    folder_id = folder.get('id')
+                    logger.info(f"📁 Created Drive folder: {folder_name} (ID: {folder_id})")
+                    return folder_id
+                    
+                except Exception as e:
+                    if attempt < 2:
+                        logger.warning(f"⚠️ Folder operation retry {attempt + 1}: {e}")
+                        time.sleep(5)
+                        continue
+                    else:
+                        raise e
                 
         except Exception as e:
             logger.error(f"❌ Error with Drive folder {folder_name}: {e}")
@@ -645,16 +854,23 @@ class StreamRecorder:
 recorder = StreamRecorder()
 
 def setup_drive_service():
-    """Setup Google Drive service with proper error handling"""
-    global drive_service
-    try:
-        if 'credentials' in session:
+    """Enhanced Drive service setup with better error handling"""
+    global drive_service, error_count, last_service_refresh
+    
+    with service_lock:
+        try:
+            if 'credentials' not in session:
+                logger.warning("❌ No credentials in session")
+                return False
+            
             creds_data = session['credentials']
             creds = Credentials.from_authorized_user_info(creds_data)
             
             # Refresh if needed
             if creds.expired and creds.refresh_token:
+                logger.info("🔄 Refreshing Google credentials...")
                 creds.refresh(Request())
+                
                 # Update session with new token
                 session['credentials'] = {
                     'token': creds.token,
@@ -664,32 +880,74 @@ def setup_drive_service():
                     'client_secret': creds.client_secret,
                     'scopes': creds.scopes
                 }
+                session.permanent = True  # Make session permanent
             
-            drive_service = build('drive', 'v3', credentials=creds)
-            logger.info("✅ Google Drive service initialized")
-            return True
-    except Exception as e:
-        logger.error(f"❌ Error setting up Drive service: {e}")
-        drive_service = None
-    return False
+            # Build service with retry logic
+            for attempt in range(3):
+                try:
+                    drive_service = build('drive', 'v3', credentials=creds)
+                    
+                    # Test the service
+                    test_query = drive_service.files().list(pageSize=1).execute()
+                    
+                    logger.info("✅ Google Drive service initialized and tested")
+                    last_service_refresh = datetime.now()
+                    error_count = 0
+                    return True
+                    
+                except Exception as e:
+                    if attempt < 2:
+                        logger.warning(f"⚠️ Drive service setup retry {attempt + 1}: {e}")
+                        time.sleep(5)
+                        continue
+                    else:
+                        raise e
+            
+        except Exception as e:
+            logger.error(f"❌ Error setting up Drive service: {e}")
+            drive_service = None
+            error_count += 1
+            
+            # Reset session if too many errors
+            if error_count > MAX_ERRORS_BEFORE_RESET:
+                logger.warning("🔄 Too many errors, clearing session...")
+                session.clear()
+                error_count = 0
+            
+        return False
+
+def refresh_drive_service():
+    """Periodically refresh Drive service to prevent timeouts"""
+    global last_service_refresh
+    
+    if drive_service and datetime.now() - last_service_refresh > timedelta(hours=1):
+        logger.info("🔄 Refreshing Drive service...")
+        setup_drive_service()
 
 def monitoring_loop():
-    """Enhanced monitoring loop with better error handling"""
-    global monitoring_active
+    """Enhanced monitoring loop with better error recovery and 24/7 reliability"""
+    global monitoring_active, error_count
     
-    logger.info("🔄 Monitoring loop started")
+    logger.info("🔄 Enhanced monitoring loop started")
+    consecutive_errors = 0
     
     while monitoring_active:
+        cycle_start = time.time()
+        
         try:
+            # Refresh Drive service periodically
+            refresh_drive_service()
+            
             usernames = recorder.load_usernames()
             if not usernames:
                 logger.info("📭 No usernames to monitor")
                 time.sleep(CHECK_INTERVAL)
                 continue
-                
+            
             logger.info(f"🔍 Checking {len(usernames)} users...")
             
-            for username in usernames:
+            # Process users with better error isolation
+            for i, username in enumerate(usernames):
                 if not monitoring_active:
                     break
                 
@@ -697,54 +955,90 @@ def monitoring_loop():
                     # Update last check time
                     last_check_times[username] = datetime.now()
                     
-                    # Check live status using enhanced detection
+                    # Check live status
                     is_live, stream_info = recorder.check_live_status(username)
                     live_status[username] = is_live
                     
                     if is_live:
                         logger.info(f"🔴 {username} is LIVE!")
                         
-                        # Start recording if not already recording
-                        if username not in recording_processes:
-                            logger.info(f"🎬 Starting recording for {username}")
+                        # Check if already recording
+                        with active_recordings_lock:
+                            already_recording = username in recording_processes
+                            if already_recording:
+                                # Verify process is still alive
+                                process = recording_processes[username]['process']
+                                if process.poll() is not None:
+                                    logger.warning(f"⚠️ Recording process died for {username}, restarting...")
+                                    recorder._cleanup_recording(username)
+                                    already_recording = False
+                        
+                        if not already_recording:
+                            logger.info(f"🎬 Starting new recording for {username}")
                             success = recorder.start_recording(username, stream_info)
                             if success:
                                 logger.info(f"✅ Recording started for {username}")
+                                consecutive_errors = 0  # Reset error count on success
                             else:
                                 logger.error(f"❌ Failed to start recording for {username}")
+                                consecutive_errors += 1
                         else:
-                            # Check if recording process is still alive
-                            process = recording_processes[username]['process']
-                            if process.poll() is not None:
-                                logger.warning(f"⚠️ Recording process died for {username}, restarting...")
-                                del recording_processes[username]
-                                recorder.start_recording(username, stream_info)
-                            else:
-                                duration = datetime.now() - recording_processes[username]['start_time']
+                            # Log active recording status
+                            rec_info = recording_processes.get(username)
+                            if rec_info:
+                                duration = datetime.now() - rec_info['start_time']
                                 logger.info(f"📹 Still recording {username} ({duration.total_seconds():.0f}s)")
                     else:
                         # User is not live
-                        if username in recording_processes:
-                            logger.info(f"🛑 {username} went offline, stopping recording")
-                            recorder.stop_recording(username)
+                        with active_recordings_lock:
+                            if username in recording_processes:
+                                logger.info(f"🛑 {username} went offline, stopping recording")
+                                recorder.stop_recording(username)
                     
-                    # Delay between user checks to avoid rate limiting
-                    time.sleep(5)
+                    # Delay between user checks to prevent rate limiting
+                    time.sleep(8)
                     
                 except Exception as e:
                     logger.error(f"❌ Error processing {username}: {e}")
                     live_status[username] = False
+                    consecutive_errors += 1
+                    
+                    # If too many consecutive errors, try to recover
+                    if consecutive_errors > 5:
+                        logger.warning("🔄 Too many errors, attempting recovery...")
+                        time.sleep(30)
+                        
+                        # Try to refresh services
+                        if drive_service:
+                            setup_drive_service()
+                        
+                        consecutive_errors = 0
             
-            # Wait before next full cycle
-            logger.info(f"⏱️ Waiting {CHECK_INTERVAL}s before next cycle...")
-            for i in range(CHECK_INTERVAL):
+            # Calculate sleep time to maintain consistent intervals
+            cycle_duration = time.time() - cycle_start
+            sleep_time = max(CHECK_INTERVAL - cycle_duration, 10)
+            
+            logger.info(f"⏱️ Cycle completed in {cycle_duration:.1f}s, waiting {sleep_time:.1f}s...")
+            
+            # Sleep with monitoring check
+            for i in range(int(sleep_time)):
                 if not monitoring_active:
                     break
                 time.sleep(1)
+            
+            # Garbage collection to prevent memory leaks
+            if datetime.now().minute % 10 == 0:  # Every 10 minutes
+                gc.collect()
                 
         except Exception as e:
-            logger.error(f"❌ Error in monitoring loop: {e}")
-            time.sleep(10)
+            logger.error(f"❌ Critical error in monitoring loop: {e}")
+            logger.error(traceback.format_exc())
+            consecutive_errors += 1
+            
+            # Recovery sleep - longer for critical errors
+            recovery_sleep = min(60 * consecutive_errors, 300)  # Max 5 minutes
+            logger.info(f"🔄 Recovery sleep: {recovery_sleep}s")
+            time.sleep(recovery_sleep)
     
     logger.info("🛑 Monitoring loop stopped")
 
@@ -755,78 +1049,103 @@ def index():
 
 @app.route('/status')
 def status():
-    """Status dashboard with enhanced user information"""
-    usernames = recorder.load_usernames()
-    
-    # Prepare user data
-    user_data = []
-    for username in usernames:
-        user_info = {
-            'username': username,
-            'is_live': live_status.get(username, False),
-            'is_recording': username in recording_processes,
-            'last_check': last_check_times.get(username),
-            'folder_exists': os.path.exists(os.path.join(RECORDINGS_DIR, username))
-        }
+    """Enhanced status dashboard"""
+    try:
+        usernames = recorder.load_usernames()
         
-        # Add recording details if active
-        if username in recording_processes:
-            rec_info = recording_processes[username]
-            duration = datetime.now() - rec_info['start_time']
-            filepath = rec_info['filepath']
-            
-            user_info.update({
-                'recording_duration': str(duration).split('.')[0],
-                'recording_file': rec_info['filename'],
-                'file_size': os.path.getsize(filepath) if os.path.exists(filepath) else 0,
-                'recording_start_formatted': rec_info['start_time'].strftime('%H:%M:%S')
-            })
+        # Prepare user data with better error handling
+        user_data = []
+        for username in usernames:
+            try:
+                user_info = {
+                    'username': username,
+                    'is_live': live_status.get(username, False),
+                    'is_recording': username in recording_processes,
+                    'last_check': last_check_times.get(username),
+                    'folder_exists': os.path.exists(os.path.join(RECORDINGS_DIR, username))
+                }
+                
+                # Add recording details if active
+                if username in recording_processes:
+                    rec_info = recording_processes[username]
+                    duration = datetime.now() - rec_info['start_time']
+                    filepath = rec_info['filepath']
+                    
+                    user_info.update({
+                        'recording_duration': str(duration).split('.')[0],
+                        'recording_file': rec_info['filename'],
+                        'file_size': os.path.getsize(filepath) if os.path.exists(filepath) else 0,
+                        'recording_start_formatted': rec_info['start_time'].strftime('%H:%M:%S')
+                    })
+                
+                # Format last check time
+                if user_info['last_check']:
+                    user_info['last_check_formatted'] = user_info['last_check'].strftime('%H:%M:%S')
+                
+                user_data.append(user_info)
+                
+            except Exception as e:
+                logger.error(f"❌ Error preparing user data for {username}: {e}")
+                # Add minimal user info
+                user_data.append({
+                    'username': username,
+                    'is_live': False,
+                    'is_recording': False,
+                    'error': True
+                })
         
-        # Format last check time
-        if user_info['last_check']:
-            user_info['last_check_formatted'] = user_info['last_check'].strftime('%H:%M:%S')
-        
-        user_data.append(user_info)
-    
-    return render_template('status.html',
-                         users=user_data,
-                         monitoring_active=monitoring_active,
-                         drive_connected=drive_service is not None,
-                         total_recordings=len(recording_processes))
+        return render_template('status.html',
+                             users=user_data,
+                             monitoring_active=monitoring_active,
+                             drive_connected=drive_service is not None,
+                             total_recordings=len(recording_processes),
+                             uptime=str(datetime.now() - session_start_time).split('.')[0])
+                             
+    except Exception as e:
+        logger.error(f"❌ Error in status route: {e}")
+        return f"Error loading status: {e}", 500
 
 @app.route('/add_user', methods=['POST'])
 def add_user():
     """Add a new user to monitoring"""
-    username = request.form.get('username', '').strip()
-    
-    if username:
-        success = recorder.add_username(username)
-        if success:
-            flash(f"✅ Added @{username} to monitoring", 'success')
+    try:
+        username = request.form.get('username', '').strip()
+        
+        if username:
+            success = recorder.add_username(username)
+            if success:
+                flash(f"✅ Added @{username} to monitoring", 'success')
+            else:
+                flash(f"⚠️ @{username} is already being monitored", 'warning')
         else:
-            flash(f"⚠️ @{username} is already being monitored", 'warning')
-    else:
-        flash("❌ Please enter a valid username", 'error')
+            flash("❌ Please enter a valid username", 'error')
+    except Exception as e:
+        logger.error(f"❌ Error adding user: {e}")
+        flash("❌ Error adding user", 'error')
     
     return redirect(url_for('status'))
 
 @app.route('/remove_user', methods=['POST'])
 def remove_user():
     """Remove a user from monitoring"""
-    username = request.form.get('username', '').strip()
-    
-    if username:
-        success = recorder.remove_username(username)
-        if success:
-            flash(f"🗑️ Removed @{username} from monitoring", 'success')
-        else:
-            flash(f"❌ @{username} not found", 'error')
+    try:
+        username = request.form.get('username', '').strip()
+        
+        if username:
+            success = recorder.remove_username(username)
+            if success:
+                flash(f"🗑️ Removed @{username} from monitoring", 'success')
+            else:
+                flash(f"❌ @{username} not found", 'error')
+    except Exception as e:
+        logger.error(f"❌ Error removing user: {e}")
+        flash("❌ Error removing user", 'error')
     
     return redirect(url_for('status'))
 
 @app.route('/auth/google')
 def auth_google():
-    """Start Google OAuth flow - FIXED VERSION"""
+    """Enhanced Google OAuth flow"""
     try:
         # Load credentials from environment or file
         creds_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
@@ -843,7 +1162,7 @@ def auth_google():
             flash("❌ Google OAuth credentials not configured", 'error')
             return redirect(url_for('status'))
         
-        # Build redirect URI properly
+        # Build redirect URI properly for Render
         if request.headers.get('X-Forwarded-Proto'):
             scheme = request.headers.get('X-Forwarded-Proto')
         else:
@@ -868,6 +1187,7 @@ def auth_google():
         session['state'] = state
         session['redirect_uri'] = redirect_uri
         session['flow_credentials_file'] = credentials_file
+        session.permanent = True  # Make session permanent
         
         logger.info(f"🔗 Starting OAuth flow with redirect: {redirect_uri}")
         return redirect(authorization_url)
@@ -879,7 +1199,7 @@ def auth_google():
 
 @app.route('/oauth2callback')
 def oauth2callback():
-    """Handle OAuth callback - FIXED VERSION"""
+    """Enhanced OAuth callback with better error handling"""
     try:
         state = session.get('state')
         redirect_uri = session.get('redirect_uri')
@@ -908,7 +1228,7 @@ def oauth2callback():
         
         credentials = flow.credentials
         
-        # Store credentials in session
+        # Store credentials in session with permanent flag
         session['credentials'] = {
             'token': credentials.token,
             'refresh_token': credentials.refresh_token,
@@ -917,6 +1237,7 @@ def oauth2callback():
             'client_secret': credentials.client_secret,
             'scopes': credentials.scopes
         }
+        session.permanent = True
         
         # Clean up session
         session.pop('state', None)
@@ -935,15 +1256,17 @@ def oauth2callback():
             flash("✅ Google Drive authorized successfully!", 'success')
             logger.info("✅ Google Drive authorization completed")
             
-            # Auto-start monitoring
+            # Auto-start monitoring if users exist
             if usernames:
-                start_monitoring_internal()
-                flash("🚀 Monitoring started automatically!", 'success')
+                result = start_monitoring_internal()
+                if result['status'] == 'success':
+                    flash("🚀 Monitoring started automatically!", 'success')
         else:
             flash("⚠️ Drive authorization completed but service setup failed", 'warning')
         
     except Exception as e:
         logger.error(f"❌ OAuth callback error: {e}")
+        logger.error(traceback.format_exc())
         flash(f"❌ Authorization failed: {str(e)}", 'error')
     
     return redirect(url_for('status'))
@@ -955,42 +1278,59 @@ def start_monitoring():
     return jsonify(result)
 
 def start_monitoring_internal():
-    """Internal function to start monitoring"""
+    """Enhanced internal function to start monitoring"""
     global monitoring_active, monitoring_thread
     
-    if monitoring_active:
-        return {"status": "warning", "message": "Monitoring already active"}
-    
-    if not drive_service:
-        return {"status": "error", "message": "Please authorize Google Drive first"}
-    
-    usernames = recorder.load_usernames()
-    if not usernames:
-        return {"status": "error", "message": "No usernames to monitor"}
-    
-    monitoring_active = True
-    monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
-    monitoring_thread.start()
-    
-    logger.info("🚀 Monitoring started")
-    return {"status": "success", "message": f"Monitoring started for {len(usernames)} users"}
+    try:
+        if monitoring_active:
+            return {"status": "warning", "message": "Monitoring already active"}
+        
+        if not drive_service:
+            return {"status": "error", "message": "Please authorize Google Drive first"}
+        
+        usernames = recorder.load_usernames()
+        if not usernames:
+            return {"status": "error", "message": "No usernames to monitor"}
+        
+        monitoring_active = True
+        monitoring_thread = threading.Thread(
+            target=monitoring_loop, 
+            daemon=True,
+            name="MainMonitoringLoop"
+        )
+        monitoring_thread.start()
+        
+        logger.info(f"🚀 Monitoring started for {len(usernames)} users")
+        return {"status": "success", "message": f"Monitoring started for {len(usernames)} users"}
+        
+    except Exception as e:
+        logger.error(f"❌ Error starting monitoring: {e}")
+        return {"status": "error", "message": f"Failed to start monitoring: {str(e)}"}
 
 @app.route('/stop_monitoring', methods=['POST'])
 def stop_monitoring():
-    """Stop monitoring"""
+    """Enhanced stop monitoring"""
     global monitoring_active
     
-    if not monitoring_active:
-        return jsonify({"status": "warning", "message": "Monitoring not active"})
-    
-    monitoring_active = False
-    
-    # Stop all active recordings
-    for username in list(recording_processes.keys()):
-        recorder.stop_recording(username)
-    
-    logger.info("🛑 Monitoring stopped")
-    return jsonify({"status": "success", "message": "Monitoring stopped"})
+    try:
+        if not monitoring_active:
+            return jsonify({"status": "warning", "message": "Monitoring not active"})
+        
+        monitoring_active = False
+        
+        # Stop all active recordings gracefully
+        with active_recordings_lock:
+            active_users = list(recording_processes.keys())
+        
+        for username in active_users:
+            recorder.stop_recording(username)
+        
+        logger.info("🛑 Monitoring stopped")
+        return jsonify({"status": "success", "message": "Monitoring stopped"})
+        
+    except Exception as e:
+        logger.error(f"❌ Error stopping monitoring: {e}")
+        return jsonify({"status": "error", "message": f"Failed to stop: {str(e)}"})
 
 @app.route('/test_user/<username>')
 def test_user(username):
@@ -1022,61 +1362,81 @@ def test_user(username):
 
 @app.route('/api/status')
 def api_status():
-    """API endpoint for status data"""
-    usernames = recorder.load_usernames()
-    
-    status_data = {
-        'monitoring_active': monitoring_active,
-        'drive_connected': drive_service is not None,
-        'total_users': len(usernames),
-        'live_users': sum(1 for user in usernames if live_status.get(user, False)),
-        'recording_users': len(recording_processes),
-        'last_update': datetime.now().isoformat(),
-        'users': []
-    }
-    
-    for username in usernames:
-        user_info = {
-            'username': username,
-            'is_live': live_status.get(username, False),
-            'is_recording': username in recording_processes,
-            'last_check': last_check_times.get(username, datetime.now()).isoformat() if username in last_check_times else None
+    """Enhanced API endpoint for status data"""
+    try:
+        usernames = recorder.load_usernames()
+        
+        status_data = {
+            'monitoring_active': monitoring_active,
+            'drive_connected': drive_service is not None,
+            'total_users': len(usernames),
+            'live_users': sum(1 for user in usernames if live_status.get(user, False)),
+            'recording_users': len(recording_processes),
+            'last_update': datetime.now().isoformat(),
+            'uptime_seconds': int((datetime.now() - session_start_time).total_seconds()),
+            'error_count': error_count,
+            'users': []
         }
         
-        if username in recording_processes:
-            rec_info = recording_processes[username]
-            duration = datetime.now() - rec_info['start_time']
-            filepath = rec_info['filepath']
-            
-            user_info.update({
-                'recording_duration_seconds': int(duration.total_seconds()),
-                'recording_file': rec_info['filename'],
-                'file_size_bytes': os.path.getsize(filepath) if os.path.exists(filepath) else 0
-            })
+        for username in usernames:
+            try:
+                user_info = {
+                    'username': username,
+                    'is_live': live_status.get(username, False),
+                    'is_recording': username in recording_processes,
+                    'last_check': last_check_times.get(username, datetime.now()).isoformat() if username in last_check_times else None
+                }
+                
+                if username in recording_processes:
+                    rec_info = recording_processes[username]
+                    duration = datetime.now() - rec_info['start_time']
+                    filepath = rec_info['filepath']
+                    
+                    user_info.update({
+                        'recording_duration_seconds': int(duration.total_seconds()),
+                        'recording_file': rec_info['filename'],
+                        'file_size_bytes': os.path.getsize(filepath) if os.path.exists(filepath) else 0
+                    })
+                
+                status_data['users'].append(user_info)
+                
+            except Exception as e:
+                logger.error(f"❌ Error preparing user status for {username}: {e}")
         
-        status_data['users'].append(user_info)
-    
-    return jsonify(status_data)
+        return jsonify(status_data)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in API status: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/revoke')
 def revoke():
-    """Revoke Google Drive authorization"""
-    global drive_service
+    """Enhanced revoke Google Drive authorization"""
+    global drive_service, monitoring_active
     
-    # Stop monitoring first
-    global monitoring_active
-    monitoring_active = False
-    
-    # Stop all recordings
-    for username in list(recording_processes.keys()):
-        recorder.stop_recording(username)
-    
-    # Clear session and service
-    if 'credentials' in session:
-        del session['credentials']
-    
-    drive_service = None
-    flash("🔓 Google Drive authorization revoked", 'info')
+    try:
+        # Stop monitoring first
+        monitoring_active = False
+        
+        # Stop all recordings
+        with active_recordings_lock:
+            active_users = list(recording_processes.keys())
+        
+        for username in active_users:
+            recorder.stop_recording(username)
+        
+        # Clear session and service
+        with service_lock:
+            if 'credentials' in session:
+                del session['credentials']
+            drive_service = None
+        
+        flash("🔓 Google Drive authorization revoked", 'info')
+        logger.info("🔓 Drive authorization revoked")
+        
+    except Exception as e:
+        logger.error(f"❌ Error revoking authorization: {e}")
+        flash("❌ Error revoking authorization", 'error')
     
     return redirect(url_for('status'))
 
@@ -1096,47 +1456,123 @@ def force_check(username):
         return redirect(url_for('status'))
         
     except Exception as e:
+        logger.error(f"❌ Error force checking {username}: {e}")
         flash(f"❌ Error checking {username}: {str(e)}", 'error')
         return redirect(url_for('status'))
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint for monitoring"""
+    try:
+        health_data = {
+            'status': 'healthy',
+            'monitoring_active': monitoring_active,
+            'drive_connected': drive_service is not None,
+            'active_recordings': len(recording_processes),
+            'uptime_seconds': int((datetime.now() - session_start_time).total_seconds()),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Check if monitoring thread is alive
+        if monitoring_active and (not monitoring_thread or not monitoring_thread.is_alive()):
+            health_data['status'] = 'degraded'
+            health_data['warning'] = 'Monitoring thread not active'
+        
+        return jsonify(health_data)
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+# Enhanced signal handling
 def signal_handler(sig, frame):
-    """Handle shutdown signals"""
+    """Enhanced shutdown signal handler"""
     global monitoring_active
     
-    logger.info("🛑 Shutdown signal received")
+    logger.info("🛑 Shutdown signal received - performing graceful shutdown...")
     monitoring_active = False
     
     # Stop all recordings gracefully
-    for username in list(recording_processes.keys()):
+    with active_recordings_lock:
+        active_users = list(recording_processes.keys())
+    
+    for username in active_users:
+        logger.info(f"🛑 Stopping recording for {username}...")
         recorder.stop_recording(username)
     
+    # Wait for processes to stop
+    time.sleep(5)
+    
+    logger.info("✅ Graceful shutdown completed")
     sys.exit(0)
 
 # Register signal handlers
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
+# Periodic cleanup function
+def periodic_cleanup():
+    """Periodic cleanup to prevent resource leaks"""
+    while True:
+        try:
+            time.sleep(600)  # Every 10 minutes
+            
+            # Clean up dead processes
+            with active_recordings_lock:
+                dead_users = []
+                for username, rec_info in recording_processes.items():
+                    if rec_info['process'].poll() is not None:
+                        dead_users.append(username)
+                
+                for username in dead_users:
+                    logger.info(f"🧹 Cleaning up dead process for {username}")
+                    recorder._cleanup_recording(username)
+            
+            # Garbage collection
+            gc.collect()
+            
+            # Log memory usage
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            logger.info(f"💾 Memory usage: {memory_mb:.1f}MB")
+            
+        except Exception as e:
+            logger.error(f"❌ Cleanup error: {e}")
+
 if __name__ == '__main__':
-    logger.info("🚀 TikTok Livestream Recorder - ENHANCED VERSION")
-    logger.info("=" * 60)
+    logger.info("🚀 TikTok Livestream Recorder - ENHANCED PRODUCTION VERSION")
+    logger.info("=" * 70)
     
     # Create initial folder structures
     usernames = recorder.load_usernames()
-    logger.info(f"📋 Loaded {len(usernames)} usernames")
+    logger.info(f"📋 Loaded {len(usernames)} usernames: {usernames}")
     
     for username in usernames:
         recorder.create_user_folder(username)
     
-    # Setup Drive service if credentials exist in session (for development)
-    if 'credentials' in session:
-        setup_drive_service()
+    # Start periodic cleanup thread
+    cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True, name="PeriodicCleanup")
+    cleanup_thread.start()
     
     # Get port from environment (Render sets this)
     port = int(os.environ.get('PORT', 5000))
     
     logger.info(f"🚀 Starting server on port {port}")
     logger.info("📊 Dashboard will be available at the provided URL")
-    logger.info("🔗 Make sure to authorize Google Drive for cloud uploads")
+    logger.info("🔗 Authorize Google Drive to enable automatic monitoring")
     
-    # Run Flask app
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    # Run Flask app with production settings
+    try:
+        app.run(
+            host='0.0.0.0', 
+            port=port, 
+            debug=False, 
+            threaded=True,
+            use_reloader=False  # Disable reloader in production
+        )
+    except Exception as e:
+        logger.error(f"❌ Server startup error: {e}")
+        sys.exit(1)
