@@ -34,8 +34,8 @@ services:
       echo "Build completed successfully"
       
     startCommand: |
-      # Start the application with proper error handling
-      python main.py
+      # Start with production startup manager for 24/7 reliability
+      python startup.py
       
     envVars:
       - key: PYTHON_VERSION
