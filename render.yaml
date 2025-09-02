@@ -4,10 +4,39 @@ services:
     env: python
     plan: free
     buildCommand: |
+      # Update system packages
+      apt-get update && apt-get install -y \
+        ffmpeg \
+        git \
+        curl \
+        wget \
+        procps \
+        psmisc \
+        htop \
+        --no-install-recommends
+      
+      # Install Python dependencies
+      pip install --upgrade pip
       pip install -r requirements.txt
-      apt-get update
-      apt-get install -y ffmpeg
-    startCommand: python app.py
+      
+      # Verify installations
+      python --version
+      ffmpeg -version
+      git --version
+      
+      # Create necessary directories
+      mkdir -p recordings templates
+      
+      # Set proper permissions
+      chmod +x auto_commit.py
+      chmod +x main.py
+      
+      echo "Build completed successfully"
+      
+    startCommand: |
+      # Start the application with proper error handling
+      python main.py
+      
     envVars:
       - key: PYTHON_VERSION
         value: 3.9.16
@@ -16,7 +45,26 @@ services:
           type: web
           name: tiktok-live-recorder
           property: port
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+    
+    # Persistent disk for recordings (temporary storage before upload)
     disk:
       name: recordings-disk
       mountPath: /opt/render/project/src/recordings
       sizeGB: 1
+    
+    # Health check configuration
+    healthCheckPath: /health
+    
+    # Auto-deploy configuration
+    autoDeploy: true
+    
+    # Resource limits for free tier optimization
+    scaling:
+      minInstances: 1
+      maxInstances: 1
