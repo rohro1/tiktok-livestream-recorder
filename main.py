@@ -11,6 +11,7 @@ import logging
 import requests
 import subprocess
 import threading
+import yt_dlp
 import re
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
@@ -35,7 +36,7 @@ SCOPES = ['https://www.googleapis.com/auth/drive.file']
 RECORDINGS_DIR = "recordings"
 USERNAMES_FILE = "usernames.txt"
 CHECK_INTERVAL = 30  # seconds between checks
-RECORDING_QUALITY = "best[height<=720]/best"  # 720p max quality
+RECORDING_QUALITY = "best[height<=480]/best"  # 480p max quality
 
 # Global state
 monitoring_active = False
@@ -135,102 +136,48 @@ class StreamRecorder:
         logger.info(f"📁 Created folder for {username}")
     
     def check_live_status_advanced(self, username):
-        """Advanced live status detection with multiple methods"""
+        """Enhanced live status detection using TikTok's actual API endpoints"""
         try:
             clean_username = username.replace('@', '').strip()
             
-            # Method 1: Profile page analysis
-            profile_url = f"https://www.tiktok.com/@{clean_username}"
+            # Method 1: TikTok Web API endpoint
+            api_url = f"https://www.tiktok.com/api/live/detail/?roomId=&uniqueId={clean_username}"
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Cache-Control': 'max-age=0'
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+                'Accept': 'application/json, text/plain, */*',
+                'Referer': f'https://www.tiktok.com/@{clean_username}',
+                'Accept-Language': 'en-US,en;q=0.9'
             }
             
-            response = requests.get(profile_url, headers=headers, timeout=15, allow_redirects=True)
+            response = requests.get(api_url, headers=headers, timeout=10)
             
             if response.status_code == 200:
-                content = response.text
-                
-                # Enhanced live detection patterns
-                live_patterns = [
-                    r'"live_status"\s*:\s*["\']?2["\']?',
-                    r'"isLive"\s*:\s*true',
-                    r'"live_room"',
-                    r'"liveRoom"',
-                    r'live_stream',
-                    r'LIVE.*NOW',
-                    r'"status"\s*:\s*["\']?2["\']?',
-                    r'live.*room.*id',
-                    r'"roomId"',
-                    r'live.*stream.*url'
-                ]
-                
-                # Check for live indicators
-                is_live = False
-                found_patterns = []
-                
-                for pattern in live_patterns:
-                    if re.search(pattern, content, re.IGNORECASE):
-                        is_live = True
-                        found_patterns.append(pattern)
-                
-                # Additional verification - check for NOT live indicators
-                not_live_patterns = [
-                    r'"live_status"\s*:\s*["\']?0["\']?',
-                    r'"isLive"\s*:\s*false',
-                    r'not.*live',
-                    r'offline',
-                    r'ended.*live'
-                ]
-                
-                for pattern in not_live_patterns:
-                    if re.search(pattern, content, re.IGNORECASE):
-                        is_live = False
-                        break
-                
-                if is_live:
-                    logger.info(f"✅ Profile Analysis: {username} is LIVE! Patterns: {found_patterns}")
-                    return True
-                else:
-                    logger.info(f"❌ Profile Analysis: {username} is not live")
-            
-            # Method 2: Direct live URL check
-            live_url = f"https://www.tiktok.com/@{clean_username}/live"
-            response = requests.get(live_url, headers=headers, timeout=15, allow_redirects=True)
-            
-            if response.status_code == 200 and "live" in response.url.lower():
-                content = response.text
-                if any(pattern in content.lower() for pattern in ['live_room', 'liveroom', 'live_stream']):
-                    logger.info(f"✅ Direct URL: {username} is LIVE!")
-                    return True
-            
-            # Method 3: Mobile API approach
-            mobile_headers = {
-                'User-Agent': 'TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet',
-                'Accept': 'application/json'
-            }
-            
-            try:
-                mobile_response = requests.get(profile_url, headers=mobile_headers, timeout=10)
-                if mobile_response.status_code == 200:
-                    mobile_content = mobile_response.text
-                    if '"live_status":2' in mobile_content or '"isLive":true' in mobile_content:
-                        logger.info(f"✅ Mobile API: {username} is LIVE!")
+                try:
+                    data = response.json()
+                    live_room = data.get('LiveRoomInfo', {}).get('liveRoom')
+                    if live_room and live_room.get('status') == 2:
+                        logger.info(f"✅ API Check: {username} is LIVE!")
                         return True
-            except:
-                pass
+                except:
+                    pass
             
-            # Method 4: yt-dlp verification
+            # Method 2: Alternative API endpoint
+            alt_api_url = f"https://www.tiktok.com/api/user/detail/?uniqueId={clean_username}"
+            response = requests.get(alt_api_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    user_info = data.get('userInfo', {}).get('user', {})
+                    if user_info.get('roomId') and user_info.get('roomId') != '':
+                        logger.info(f"✅ User API: {username} is LIVE!")
+                        return True
+                except:
+                    pass
+            
+            # Method 3: yt-dlp verification (most reliable)
             try:
+                live_url = f"https://www.tiktok.com/@{clean_username}/live"
                 ydl_opts = {
                     'quiet': True,
                     'no_warnings': True,
@@ -243,10 +190,27 @@ class StreamRecorder:
                     if info and info.get('is_live'):
                         logger.info(f"✅ yt-dlp: {username} is LIVE!")
                         return True
-            except:
-                pass
+            except Exception as e:
+                if "not currently live" not in str(e).lower():
+                    logger.debug(f"yt-dlp error for {username}: {e}")
             
-            logger.info(f"❌ All methods: {username} is not live")
+            # Method 4: Profile page check as fallback
+            profile_url = f"https://www.tiktok.com/@{clean_username}"
+            response = requests.get(profile_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                content = response.text.lower()
+                # Look for specific live indicators in the page
+                if any(indicator in content for indicator in [
+                    '"live_status":2',
+                    '"islive":true', 
+                    'live_room',
+                    'currently live'
+                ]):
+                    logger.info(f"✅ Profile Check: {username} is LIVE!")
+                    return True
+            
+            logger.info(f"❌ All checks: {username} is not live")
             return False
             
         except Exception as e:
@@ -304,12 +268,13 @@ class StreamRecorder:
             cmd = [
                 'ffmpeg',
                 '-i', stream_url,
-                '-c:v', 'libx264',  # Video codec
-                '-c:a', 'aac',      # Audio codec
+                '-c:v', 'libx264',   # Video codec
+                '-c:a', 'aac',       # Audio codec
                 '-preset', 'fast',   # Encoding speed
-                '-crf', '23',        # Quality (lower = better)
-                '-maxrate', '2M',    # Max bitrate
-                '-bufsize', '4M',    # Buffer size
+                '-crf', '28',        # Quality for 480p (higher = smaller file)
+                '-maxrate', '1M',    # Max bitrate for 480p
+                '-bufsize', '2M',    # Buffer size
+                '-vf', 'scale=-2:480', # Force 480p resolution
                 '-f', 'mp4',         # Output format
                 '-movflags', '+faststart',  # Web optimization
                 '-y',                # Overwrite output
@@ -716,8 +681,18 @@ def remove_user():
 def auth_google():
     """Start Google OAuth flow"""
     try:
-        # Check if credentials.json exists
-        if not os.path.exists('credentials.json'):
+        # Load credentials from environment or file
+        creds_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+        if creds_json:
+            # Use environment variable (for production)
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                f.write(creds_json)
+                credentials_file = f.name
+        elif os.path.exists('credentials.json'):
+            # Use local file (for development)
+            credentials_file = 'credentials.json'
+        else:
             flash("❌ Google OAuth credentials not configured", 'error')
             return redirect(url_for('status'))
         
@@ -731,7 +706,7 @@ def auth_google():
         redirect_uri = f"{scheme}://{host}/oauth2callback"
         
         flow = Flow.from_client_secrets_file(
-            'credentials.json',
+            credentials_file,
             scopes=SCOPES,
             redirect_uri=redirect_uri
         )
@@ -763,8 +738,18 @@ def oauth2callback():
             flash("❌ OAuth state error", 'error')
             return redirect(url_for('status'))
         
+        # Load credentials from environment or file
+        creds_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+        if creds_json:
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                f.write(creds_json)
+                credentials_file = f.name
+        else:
+            credentials_file = 'credentials.json'
+        
         flow = Flow.from_client_secrets_file(
-            'credentials.json',
+            credentials_file,
             scopes=SCOPES,
             state=state,
             redirect_uri=redirect_uri
@@ -785,10 +770,18 @@ def oauth2callback():
         # Setup Drive service
         setup_drive_service()
         
-        # Create folders for all existing users
-        usernames = recorder.load_usernames()
-        for username in usernames:
-            recorder.create_user_folder(username)
+        # Create Drive folders for all existing users
+        if drive_service:
+            usernames = recorder.load_usernames()
+            for username in usernames:
+                recorder.create_user_folder(username)
+                # Also create Drive folder structure
+                try:
+                    main_folder_id = recorder.get_or_create_folder(drive_service, "TikTok_Recordings")
+                    user_folder_id = recorder.get_or_create_folder(drive_service, username, main_folder_id)
+                    logger.info(f"📁 Created Drive folders for {username}")
+                except Exception as e:
+                    logger.error(f"❌ Error creating Drive folders for {username}: {e}")
         
         flash("✅ Google Drive authorized successfully!", 'success')
         logger.info("✅ Google Drive authorization completed")
