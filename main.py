@@ -136,79 +136,72 @@ class StreamRecorder:
         logger.info(f"📁 Created folder for {username}")
     
     def check_live_status_advanced(self, username):
-        """Enhanced live status detection using TikTok's actual API endpoints"""
+        """Enhanced live status detection using multiple reliable methods"""
         try:
             clean_username = username.replace('@', '').strip()
             
-            # Method 1: TikTok Web API endpoint
-            api_url = f"https://www.tiktok.com/api/live/detail/?roomId=&uniqueId={clean_username}"
+            # Method 1: TikTok mobile API (more reliable)
+            mobile_api_url = f"https://m.tiktok.com/api/user/detail/?uniqueId={clean_username}"
             headers = {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+                'User-Agent': 'TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet',
                 'Accept': 'application/json, text/plain, */*',
-                'Referer': f'https://www.tiktok.com/@{clean_username}',
-                'Accept-Language': 'en-US,en;q=0.9'
+                'Accept-Language': 'en-US,en;q=0.9',
+                'X-Requested-With': 'XMLHttpRequest'
             }
             
-            response = requests.get(api_url, headers=headers, timeout=10)
+            response = requests.get(mobile_api_url, headers=headers, timeout=10)
             
             if response.status_code == 200:
                 try:
                     data = response.json()
-                    live_room = data.get('LiveRoomInfo', {}).get('liveRoom')
-                    if live_room and live_room.get('status') == 2:
-                        logger.info(f"✅ API Check: {username} is LIVE!")
+                    user_detail = data.get('userInfo', {}).get('user', {})
+                    room_id = user_detail.get('roomId', '')
+                    if room_id and room_id != '' and room_id != '0':
+                        logger.info(f"✅ Mobile API: {username} is LIVE! (Room: {room_id})")
                         return True
                 except:
                     pass
             
-            # Method 2: Alternative API endpoint
-            alt_api_url = f"https://www.tiktok.com/api/user/detail/?uniqueId={clean_username}"
-            response = requests.get(alt_api_url, headers=headers, timeout=10)
+            # Method 2: Check live room directly
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    user_detail = data.get('userInfo', {}).get('user', {})
+                    room_id = user_detail.get('roomId', '')
+                    
+                    if room_id and room_id != '' and room_id != '0':
+                        # Verify room is actually live
+                        room_url = f"https://webcast.tiktok.com/webcast/room/info/?room_id={room_id}"
+                        room_response = requests.get(room_url, headers=headers, timeout=10)
+                        
+                        if room_response.status_code == 200:
+                            room_data = room_response.json()
+                            room_info = room_data.get('data', {}).get('room', {})
+                            if room_info.get('status') == 2:  # 2 = live
+                                logger.info(f"✅ Room API: {username} is LIVE! (Verified)")
+                                return True
+                except:
+                    pass
             
+            # Method 3: Alternative web endpoint
+            web_api_url = f"https://www.tiktok.com/api/user/detail/?uniqueId={clean_username}"
+            web_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'application/json',
+                'Referer': f'https://www.tiktok.com/@{clean_username}'
+            }
+            
+            response = requests.get(web_api_url, headers=web_headers, timeout=10)
             if response.status_code == 200:
                 try:
                     data = response.json()
                     user_info = data.get('userInfo', {}).get('user', {})
-                    if user_info.get('roomId') and user_info.get('roomId') != '':
-                        logger.info(f"✅ User API: {username} is LIVE!")
+                    room_id = user_info.get('roomId', '')
+                    if room_id and room_id != '' and room_id != '0':
+                        logger.info(f"✅ Web API: {username} is LIVE!")
                         return True
                 except:
                     pass
-            
-            # Method 3: yt-dlp verification (most reliable)
-            try:
-                live_url = f"https://www.tiktok.com/@{clean_username}/live"
-                ydl_opts = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'extract_flat': True,
-                    'timeout': 15
-                }
-                
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(live_url, download=False)
-                    if info and info.get('is_live'):
-                        logger.info(f"✅ yt-dlp: {username} is LIVE!")
-                        return True
-            except Exception as e:
-                if "not currently live" not in str(e).lower():
-                    logger.debug(f"yt-dlp error for {username}: {e}")
-            
-            # Method 4: Profile page check as fallback
-            profile_url = f"https://www.tiktok.com/@{clean_username}"
-            response = requests.get(profile_url, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                content = response.text.lower()
-                # Look for specific live indicators in the page
-                if any(indicator in content for indicator in [
-                    '"live_status":2',
-                    '"islive":true', 
-                    'live_room',
-                    'currently live'
-                ]):
-                    logger.info(f"✅ Profile Check: {username} is LIVE!")
-                    return True
             
             logger.info(f"❌ All checks: {username} is not live")
             return False
@@ -218,16 +211,29 @@ class StreamRecorder:
             return False
     
     def get_stream_url(self, username):
-        """Get stream URL for recording"""
+        """Get stream URL for recording using updated yt-dlp"""
         try:
             clean_username = username.replace('@', '').strip()
             live_url = f"https://www.tiktok.com/@{clean_username}/live"
             
             ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
+                'quiet': False,
+                'no_warnings': False,
                 'format': RECORDING_QUALITY,
-                'timeout': 30
+                'timeout': 30,
+                'extractor_args': {
+                    'tiktok': {
+                        'webpage_url_basename': 'live'
+                    }
+                },
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                }
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -235,9 +241,21 @@ class StreamRecorder:
                 if info and info.get('url'):
                     logger.info(f"🔗 Got stream URL for {username}")
                     return info['url']
+                elif info and info.get('formats'):
+                    # Try to get URL from formats
+                    for fmt in info['formats']:
+                        if fmt.get('url'):
+                            logger.info(f"🔗 Got stream URL from formats for {username}")
+                            return fmt['url']
             
             return None
             
+        except yt_dlp.utils.DownloadError as e:
+            if "not currently live" in str(e):
+                logger.info(f"❌ {username} is not live (yt-dlp confirmed)")
+            else:
+                logger.error(f"❌ yt-dlp error for {username}: {e}")
+            return None
         except Exception as e:
             logger.error(f"❌ Error getting stream URL for {username}: {e}")
             return None
@@ -268,16 +286,19 @@ class StreamRecorder:
             cmd = [
                 'ffmpeg',
                 '-i', stream_url,
-                '-c:v', 'libx264',   # Video codec
-                '-c:a', 'aac',       # Audio codec
-                '-preset', 'fast',   # Encoding speed
-                '-crf', '28',        # Quality for 480p (higher = smaller file)
-                '-maxrate', '1M',    # Max bitrate for 480p
-                '-bufsize', '2M',    # Buffer size
-                '-vf', 'scale=-2:480', # Force 480p resolution
-                '-f', 'mp4',         # Output format
-                '-movflags', '+faststart',  # Web optimization
-                '-y',                # Overwrite output
+                '-c:v', 'libx264',
+                '-c:a', 'aac',
+                '-preset', 'ultrafast',  # Faster encoding for live streams
+                '-crf', '30',           # Higher CRF for smaller files at 480p
+                '-maxrate', '800k',     # Lower bitrate for 480p
+                '-bufsize', '1600k',    # Buffer size
+                '-vf', 'scale=-2:480',  # Force 480p resolution
+                '-f', 'mp4',
+                '-movflags', '+faststart',
+                '-reconnect', '1',      # Auto-reconnect on connection loss
+                '-reconnect_streamed', '1',
+                '-reconnect_delay_max', '5',
+                '-y',
                 filepath
             ]
             
@@ -764,7 +785,8 @@ def oauth2callback():
             'token_uri': credentials.token_uri,
             'client_id': credentials.client_id,
             'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes
+            'scopes': credentials.scopes,
+            'type': 'authorized_user'
         }
         
         # Setup Drive service
