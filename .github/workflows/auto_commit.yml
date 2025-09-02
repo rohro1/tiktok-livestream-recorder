@@ -1,26 +1,16 @@
-name: Auto Commit and Push
+name: Auto Deploy TikTok Recorder
 
 on:
-  schedule:
-    # Run every 30 minutes
-    - cron: '*/30 * * * *'
-  workflow_dispatch: # Allow manual triggering
   push:
     branches: [ main ]
-    paths:
-      - 'recordings/**'
-      - '*.log'
-      - 'usernames.txt'
-      - 'status_tracker.json'
-
-permissions:
-  contents: write
-  actions: read
+  schedule:
+    # Run auto-commit every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
 
 jobs:
   auto-commit:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     
     steps:
     - name: Checkout repository
@@ -28,126 +18,51 @@ jobs:
       with:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
-        persist-credentials: true
-    
-    - name: Configure Git with enhanced settings
-      run: |
-        git config --global user.name "TikTok Recorder Bot"
-        git config --global user.email "recorder@github-actions.com"
-        git config --global push.default simple
-        git config --global pull.rebase false
-        git config --global core.autocrlf false
-        git config --global core.filemode false
-        git config --global http.postBuffer 524288000
-        git config --global http.timeout 60
-        git config --global --add safe.directory "*"
-    
-    - name: Enhanced cleanup of git locks and processes
-      run: |
-        # Remove all possible lock files
-        find .git -name "*.lock" -type f -delete || true
-        find .git -name "*.lock.*" -type f -delete || true
-        
-        # Kill any git processes (in case of hung processes)
-        pkill -f git || true
-        pkill -f "git-remote-https" || true
-        
-        # Wait for cleanup
-        sleep 3
-        
-        # Verify git is working
-        git --version
-        git status || echo "Git status check failed, continuing..."
     
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
-        cache: 'pip'
+        python-version: '3.9'
     
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install psutil requests
     
-    - name: Pre-commit repository health check
+    - name: Configure Git
       run: |
-        # Check repository integrity
-        git fsck --full || echo "Repository fsck completed with warnings"
-        
-        # Clean up repository
-        git gc --aggressive --prune=now || echo "GC completed with warnings"
-        
-        # Fetch latest changes
-        git fetch origin main --prune || echo "Fetch completed with warnings"
+        git config --global user.name "TikTok Recorder Bot"
+        git config --global user.email "recorder@github-actions.com"
+        git config --global push.default simple
     
-    - name: Check for changes
-      id: check
+    - name: Run auto-commit
       run: |
-        # Ensure we're on the right branch
-        git checkout main || git checkout -b main
-        
-        # Check for changes
-        if [[ -n $(git status --porcelain) ]]; then
-          echo "changes=true" >> $GITHUB_OUTPUT
-          echo "📝 Found changes to commit:"
-          git status --porcelain
-          
-          # Count changes by type
-          ADDED=$(git status --porcelain | grep -c "^A" || echo "0")
-          MODIFIED=$(git status --porcelain | grep -c "^M" || echo "0")
-          DELETED=$(git status --porcelain | grep -c "^D" || echo "0")
-          UNTRACKED=$(git status --porcelain | grep -c "^??" || echo "0")
-          
-          echo "change_summary=Added: $ADDED, Modified: $MODIFIED, Deleted: $DELETED, Untracked: $UNTRACKED" >> $GITHUB_OUTPUT
-        else
-          echo "changes=false" >> $GITHUB_OUTPUT
-          echo "✅ No changes found"
-        fi
-    
-    - name: Run enhanced auto-commit script
-      if: steps.check.outputs.changes == 'true'
-      run: |
-        echo "🚀 Running enhanced auto-commit script..."
         python auto_commit.py
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      timeout-minutes: 10
     
-    - name: Emergency force commit (fallback)
-      if: failure() && steps.check.outputs.changes == 'true'
+    - name: Verify deployment
       run: |
-        echo "🆘 Running emergency commit procedure..."
-        
-        # Kill any remaining processes
-        pkill -f git || true
-        sleep 2
-        
-        # Remove all locks
-        find .git -name "*.lock" -delete || true
-        
-        # Emergency commit
-        TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-        git add . || echo "Add failed, continuing..."
-        git commit -m "Emergency auto-commit: $TIMESTAMP - ${{ steps.check.outputs.change_summary }}" --allow-empty || echo "Commit failed, continuing..."
-        
-        # Try multiple push strategies
-        git push origin main || \
-        git push origin main --force-with-lease || \
-        git push origin main --force || \
-        echo "All push attempts failed"
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      timeout-minutes: 5
+        echo "Deployment timestamp: $(date)"
+        echo "Repository status:"
+        git status --porcelain || true
+        echo "Recent commits:"
+        git log --oneline -5 || true
+
+  health-monitor:
+    runs-on: ubuntu-latest
+    needs: auto-commit
     
-    - name: Post-commit cleanup
-      if: always()
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Check application health
       run: |
-        # Final cleanup
-        find .git -name "*.lock" -delete || true
-        pkill -f git || true
+        # Try to check if the Render app is responsive
+        echo "Checking application health..."
         
-        # Log final status
-        echo "📊 Final repository status:"
-        git status || echo "Status check failed"
-        git log --oneline -5 || echo "Log check failed"
+        # Add your Render app URL here when available
+        # curl -f https://your-app-url.onrender.com/health || echo "Health check failed"
+        
+        echo "Health monitoring completed"
